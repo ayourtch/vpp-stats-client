@@ -129,6 +129,40 @@ fn do_dump(
     }
     out
 }
+use std::arch::asm;
+
+/* https://lukas-prokop.at/articles/2021-11-10-rdtsc-with-rust-asm */
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn rdtscp() -> u64 {
+    let eax: u32;
+    let ecx: u32;
+    let edx: u32;
+    {
+        unsafe {
+            asm!(
+              "rdtscp",
+              lateout("eax") eax,
+              lateout("ecx") ecx,
+              lateout("edx") edx,
+              options(nomem, nostack)
+            );
+        }
+    }
+
+    let counter: u64 = (edx as u64) << 32 | eax as u64;
+    counter
+}
+
+#[no_mangle]
+fn bench<F>(f: F) -> u64
+where
+    F: Fn(),
+{
+    let pre = rdtscp(); // unsafe { core::arch::x86_64::_rdtsc() };
+    f();
+    let post = rdtscp(); // unsafe { core::arch::x86_64::_rdtsc() };
+    post - pre
+}
 
 fn main() {
     unsafe {
