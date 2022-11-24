@@ -107,6 +107,15 @@ fn do_dump(
                 }
                 stat_directory_type_t_STAT_DIR_TYPE_NAME_VECTOR => {
                     println!("NAME_VECTOR");
+                    let vvv = buf[i].__bindgen_anon_1.name_vector as *mut *const i8;
+                    let vvv_len = stat_segment_vec_len(vvv as *mut libc::c_void) as usize;
+                    let vc: &mut [*const i8] = core::slice::from_raw_parts_mut(vvv, vvv_len);
+
+                    for k in 0..vvv_len {
+                        let c_str: &CStr = unsafe { CStr::from_ptr(vc[k]) };
+                        let str_slice: &str = c_str.to_str().unwrap();
+                        println!("[{}]: {}", k, str_slice);
+                    }
                 }
                 stat_directory_type_t_STAT_DIR_TYPE_EMPTY => {
                     println!("EMPTY");
