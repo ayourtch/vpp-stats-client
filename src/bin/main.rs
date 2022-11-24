@@ -34,10 +34,18 @@ fn ptr2str(cstrptr: *const i8) -> &'static str {
     str_slice
 }
 
+fn vv2slice<T>(vv: *const T) -> &'static [T] {
+    unsafe {
+        let vv_len = stat_segment_vec_len(vv as *mut libc::c_void) as usize;
+        let slice: &[T] = core::slice::from_raw_parts(vv, vv_len);
+        slice
+    }
+}
+
 #[no_mangle]
 fn check(sc: *mut stat_client_main_t, ptr: *mut u32, length: usize) -> Vec<String> {
     let mut out: Vec<String> = vec![];
-    let buf: &mut [u32] = unsafe { core::slice::from_raw_parts_mut(ptr, length) };
+    let buf = vv2slice(ptr);
     for i in 0..length {
         let name = unsafe { stat_segment_index_to_name_r(buf[i], sc) };
         out.push(ptr2str(name).to_string());
@@ -45,81 +53,61 @@ fn check(sc: *mut stat_client_main_t, ptr: *mut u32, length: usize) -> Vec<Strin
     out
 }
 
-fn do_dump(
-    sc: *mut stat_client_main_t,
-    ptr: *mut stat_segment_data_t,
-    length: usize,
-) -> Vec<String> {
+fn do_dump(sc: *mut stat_client_main_t, ptr: *const stat_segment_data_t) -> Vec<String> {
     let mut out: Vec<String> = vec![];
-    println!("test");
-    unsafe {
-        let buf: &mut [stat_segment_data_t] = core::slice::from_raw_parts_mut(ptr, length);
-        for i in 0..length {
-            print!("Name: {} type: ", ptr2str(buf[i].name));
-            match buf[i].type_ {
-                STAT_DIR_TYPE_ILLEGAL => {
-                    unimplemented!()
-                }
-                STAT_DIR_TYPE_SCALAR_INDEX => {
-                    println!(
-                        "SCALAR_INDEX : value {}",
-                        buf[i].__bindgen_anon_1.scalar_value
-                    );
-                }
-                STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
-                    println!("COUNTER_VECTOR_SIMPLE");
-                    let vvv = buf[i].__bindgen_anon_1.simple_counter_vec;
-                    let vvv_len = stat_segment_vec_len(vvv as *mut libc::c_void) as usize;
-                    let vc: &[*mut u64] = core::slice::from_raw_parts_mut(vvv, vvv_len);
-
-                    for k in 0..vvv_len {
-                        let vvvj = vc[k];
-                        let vvvj_len = stat_segment_vec_len(vvvj as *mut libc::c_void) as usize;
-                        let vcj: &[u64] = core::slice::from_raw_parts_mut(vvvj, vvvj_len);
-
-                        for j in 0..vvvj_len {
-                            println!("     [ {} @ {} ]: {} packets", j, k, vcj[j]);
-                        }
-                    }
-                }
-                STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED => {
-                    println!("COUNTER_VECTOR_COMBINED");
-                    let vvv = buf[i].__bindgen_anon_1.combined_counter_vec;
-                    let vvv_len = stat_segment_vec_len(vvv as *mut libc::c_void) as usize;
-                    let vc: &[*mut vlib_counter_t] = core::slice::from_raw_parts_mut(vvv, vvv_len);
-
-                    for k in 0..vvv_len {
-                        let vvvj = vc[k];
-                        let vvvj_len = stat_segment_vec_len(vvvj as *mut libc::c_void) as usize;
-                        let vcj: &[vlib_counter_t] =
-                            core::slice::from_raw_parts_mut(vvvj, vvvj_len);
-
-                        for j in 0..vvvj_len {
-                            println!(
-                                "     [ {} @ {} ]: {} packets, {} bytes",
-                                j, k, vcj[j].packets, vcj[j].bytes
-                            );
-                        }
-                    }
-                }
-                STAT_DIR_TYPE_NAME_VECTOR => {
-                    println!("NAME_VECTOR");
-                    let vvv = buf[i].__bindgen_anon_1.name_vector as *mut *const i8;
-                    let vvv_len = stat_segment_vec_len(vvv as *mut libc::c_void) as usize;
-                    let vc: &mut [*const i8] = core::slice::from_raw_parts_mut(vvv, vvv_len);
-
-                    for k in 0..vvv_len {
-                        println!("[{}]: {}", k, ptr2str(vc[k]));
-                    }
-                }
-                STAT_DIR_TYPE_EMPTY => {
-                    println!("EMPTY");
-                }
-                STAT_DIR_TYPE_SYMLINK => {
-                    println!("SYMLINK");
-                }
-                7_u32..=u32::MAX => unimplemented!(),
+    let buf = vv2slice(ptr);
+    for i in 0..buf.len() {
+        print!("Name: {} type: ", ptr2str(buf[i].name));
+        match buf[i].type_ {
+            STAT_DIR_TYPE_ILLEGAL => {
+                unimplemented!()
             }
+            STAT_DIR_TYPE_SCALAR_INDEX => {
+                println!("SCALAR_INDEX : value {}", unsafe {
+                    buf[i].__bindgen_anon_1.scalar_value
+                });
+            }
+            STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
+                println!("COUNTER_VECTOR_SIMPLE");
+                let vs = vv2slice(unsafe { buf[i].__bindgen_anon_1.simple_counter_vec });
+
+                for k in 0..vs.len() {
+                    let vss = vv2slice(vs[k]);
+                    for j in 0..vss.len() {
+                        println!("     [ {} @ {} ]: {} packets", j, k, vss[j]);
+                    }
+                }
+            }
+            STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED => {
+                println!("COUNTER_VECTOR_COMBINED");
+                let vc = vv2slice(unsafe { buf[i].__bindgen_anon_1.combined_counter_vec });
+
+                for k in 0..vc.len() {
+                    let vcs = vv2slice(vc[k]);
+
+                    for j in 0..vcs.len() {
+                        println!(
+                            "     [ {} @ {} ]: {} packets, {} bytes",
+                            j, k, vcs[j].packets, vcs[j].bytes
+                        );
+                    }
+                }
+            }
+            STAT_DIR_TYPE_NAME_VECTOR => {
+                println!("NAME_VECTOR");
+                let nv = vv2slice(unsafe { buf[i].__bindgen_anon_1.name_vector });
+
+                for k in 0..nv.len() {
+                    println!("[{}]: {}", k, ptr2str(nv[k] as *const i8));
+                }
+            }
+            STAT_DIR_TYPE_EMPTY => {
+                println!("EMPTY");
+            }
+            STAT_DIR_TYPE_SYMLINK => {
+                println!("SYMLINK");
+            }
+            7_u32..=u32::MAX => unimplemented!(),
         }
     }
     out
@@ -189,11 +177,7 @@ fn main() {
 
         let res = stat_segment_dump_r(dir, sc);
 
-        do_dump(
-            sc,
-            res,
-            stat_segment_vec_len(res as *mut libc::c_void) as usize,
-        );
+        do_dump(sc, res);
 
         stat_segment_data_free(res);
 
