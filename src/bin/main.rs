@@ -180,8 +180,26 @@ struct VppStatDir<'a> {
     dir: *const u32,
 }
 
+struct VppStatData<'a> {
+    dir: &'a VppStatDir<'a>,
+    data: *const vpp_stat_client::sys::stat_segment_data_t,
+}
+impl Drop for VppStatData<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            stat_segment_data_free(self.data as *mut vpp_stat_client::sys::stat_segment_data_t)
+        };
+    }
+}
+
 impl<'a> VppStatDir<'a> {
-    fn dump(&self) {}
+    fn dump(&'a self) -> VppStatData<'a> {
+        let res = unsafe { stat_segment_dump_r(self.dir as *mut u32, self.client.stat_client) };
+        VppStatData {
+            dir: self,
+            data: res,
+        }
+    }
 }
 
 impl VppStatClient {
@@ -211,6 +229,15 @@ impl VppStatClient {
             client: &self,
             dir: dir,
         } // FIXME: errors
+    }
+}
+
+impl Drop for VppStatClient {
+    fn drop(&mut self) {
+        unsafe {
+            stat_segment_disconnect_r(self.stat_client);
+            stat_client_free(self.stat_client);
+        }
     }
 }
 
@@ -247,14 +274,7 @@ fn main() {
         */
 
         println!("running dump");
-
-        let res = stat_segment_dump_r(dir.dir as *mut u32, dir.client.stat_client);
-
-        do_dump(dir.client.stat_client, res);
-
-        stat_segment_data_free(res);
-
-        stat_segment_disconnect_r(dir.client.stat_client);
-        stat_client_free(dir.client.stat_client);
+        let data = dir.dump();
+        do_dump(data.dir.client.stat_client, data.data);
     }
 }
