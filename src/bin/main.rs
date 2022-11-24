@@ -1,4 +1,4 @@
-use vpp_stat_client::*;
+use vpp_stat_client::sys::*;
 
 macro_rules! cstr {
     ($s:expr) => {
@@ -45,11 +45,6 @@ fn vv2slice<T>(vv: *const T) -> &'static [T] {
 #[no_mangle]
 fn check(sc: *mut stat_client_main_t, ptr: *mut u32, length: usize) -> Vec<String> {
     let mut out: Vec<String> = vec![];
-    let buf = vv2slice(ptr);
-    for i in 0..length {
-        let name = unsafe { stat_segment_index_to_name_r(buf[i], sc) };
-        out.push(ptr2str(name).to_string());
-    }
     out
 }
 
@@ -167,24 +162,82 @@ where
     post - pre
 }
 
+struct VppStatClient {
+    stat_client: *mut vpp_stat_client::sys::stat_client_main_t,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum VppStatError {
+    CouldNotOpenSocket,
+    CouldNotConnect,
+    ReceivingFdFailed,
+    MmapFstatFailed,
+    MmapMapFailed,
+}
+
+struct VppStatDir<'a> {
+    client: &'a VppStatClient,
+    dir: *const u32,
+}
+
+impl<'a> VppStatDir<'a> {
+    fn dump(&self) {}
+}
+
+impl VppStatClient {
+    fn connect(path: &str) -> Result<Self, VppStatError> {
+        use crate::VppStatError::*;
+        use vpp_stat_client::sys::*;
+
+        let sc = unsafe { stat_client_get() };
+        let cpath = format!("{}\0", path);
+        let cstrpath = cpath.as_str() as *const str as *const [i8] as *const i8;
+        let rv = unsafe { stat_segment_connect_r(cstrpath, sc) };
+        match rv {
+            0 => Ok(VppStatClient { stat_client: sc }),
+            -1 => Err(CouldNotOpenSocket),
+            -2 => Err(CouldNotConnect),
+            -3 => Err(ReceivingFdFailed),
+            -4 => Err(MmapFstatFailed),
+            -5 => Err(MmapMapFailed),
+            _ => unimplemented!(),
+        }
+    }
+
+    fn ls(&self) -> VppStatDir {
+        let patterns = std::ptr::null_mut();
+        let dir = unsafe { stat_segment_ls_r(patterns, self.stat_client) };
+        VppStatDir {
+            client: &self,
+            dir: dir,
+        } // FIXME: errors
+    }
+}
+
 fn main() {
     unsafe {
         let data = [0u8; 128];
 
         clib_mem_init(std::ptr::null_mut(), 64000000);
 
-        let sc = stat_client_get();
-        let rv = stat_segment_connect_r(cstr!("/tmp/stats.sock"), sc);
-        println!("Hello world! {}", rv);
         println!("running dir");
-        let patterns = std::ptr::null_mut();
-        let dir = stat_segment_ls_r(patterns, sc);
 
-        let str_buf = check(
-            sc,
-            dir,
-            stat_segment_vec_len(dir as *mut libc::c_void) as usize,
-        );
+        let c = VppStatClient::connect("/tmp/stats.sock").unwrap();
+        let dir = c.ls();
+        /*
+        let buf = vv2slice(ptr);
+        for i in 0..length {
+            let name = unsafe { stat_segment_index_to_name_r(buf[i], sc) };
+            out.push(ptr2str(name).to_string());
+        }
+
+
+            let str_buf = check(
+                sc,
+                dir,
+                stat_segment_vec_len(dir as *mut libc::c_void) as usize,
+            );
+            */
 
         // println!("{:?}", str_buf);
         /*
@@ -195,13 +248,13 @@ fn main() {
 
         println!("running dump");
 
-        let res = stat_segment_dump_r(dir, sc);
+        let res = stat_segment_dump_r(dir.dir as *mut u32, dir.client.stat_client);
 
-        do_dump(sc, res);
+        do_dump(dir.client.stat_client, res);
 
         stat_segment_data_free(res);
 
-        stat_segment_disconnect_r(sc);
-        stat_client_free(sc);
+        stat_segment_disconnect_r(dir.client.stat_client);
+        stat_client_free(dir.client.stat_client);
     }
 }

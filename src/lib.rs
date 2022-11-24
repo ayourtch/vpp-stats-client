@@ -10,7 +10,9 @@ pub mod macros; /* Handy macros */
 // use std;
 use std::fmt::{Debug, Error, Formatter};
 
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+pub mod sys {
+    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+}
 
 // unsafe impl std::marker::Send for  vlib_plugin_registration_t { }
 
