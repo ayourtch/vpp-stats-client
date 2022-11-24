@@ -53,6 +53,26 @@ fn check(sc: *mut stat_client_main_t, ptr: *mut u32, length: usize) -> Vec<Strin
     out
 }
 
+struct CounterComnbined {
+    packets: u64,
+    bytes: u64,
+}
+
+enum StatValue<'a> {
+    Illegal,
+    ScalarIndex(f64),
+    CounterVectorSimple(&'a [*const u64]),
+    CounterVectorCombined(&'a [*const vlib_counter_t]),
+    NameVector(&'a [*const i8]),
+    Empty,
+    Symlink,
+}
+
+struct StatSegmentData<'a> {
+    name: &'a str,
+    val: StatValue<'a>,
+}
+
 fn do_dump(sc: *mut stat_client_main_t, ptr: *const stat_segment_data_t) -> Vec<String> {
     let mut out: Vec<String> = vec![];
     let buf = vv2slice(ptr);
