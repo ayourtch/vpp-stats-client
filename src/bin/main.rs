@@ -28,18 +28,19 @@ use libc::c_char;
 use std::ffi::CStr;
 use std::str;
 
+fn ptr2str(cstrptr: *const i8) -> &'static str {
+    let c_str: &CStr = unsafe { CStr::from_ptr(cstrptr) };
+    let str_slice: &str = c_str.to_str().unwrap();
+    str_slice
+}
+
 #[no_mangle]
 fn check(sc: *mut stat_client_main_t, ptr: *mut u32, length: usize) -> Vec<String> {
     let mut out: Vec<String> = vec![];
-    unsafe {
-        let buf: &mut [u32] = core::slice::from_raw_parts_mut(ptr, length);
-        for i in 0..length {
-            let name = stat_segment_index_to_name_r(buf[i], sc);
-            let c_str: &CStr = unsafe { CStr::from_ptr(name) };
-            let str_slice: &str = c_str.to_str().unwrap();
-            let str_buf: String = str_slice.to_owned(); // if necessary
-            out.push(str_buf);
-        }
+    let buf: &mut [u32] = unsafe { core::slice::from_raw_parts_mut(ptr, length) };
+    for i in 0..length {
+        let name = unsafe { stat_segment_index_to_name_r(buf[i], sc) };
+        out.push(ptr2str(name).to_string());
     }
     out
 }
@@ -54,11 +55,7 @@ fn do_dump(
     unsafe {
         let buf: &mut [stat_segment_data_t] = core::slice::from_raw_parts_mut(ptr, length);
         for i in 0..length {
-            let c_str: &CStr = unsafe { CStr::from_ptr(buf[i].name) };
-            let str_slice: &str = c_str.to_str().unwrap();
-            let str_buf: String = str_slice.to_owned(); // if necessary
-
-            print!("Name: {} type: ", str_buf);
+            print!("Name: {} type: ", ptr2str(buf[i].name));
             match buf[i].type_ {
                 stat_directory_type_t_STAT_DIR_TYPE_ILLEGAL => {
                     unimplemented!()
@@ -112,9 +109,7 @@ fn do_dump(
                     let vc: &mut [*const i8] = core::slice::from_raw_parts_mut(vvv, vvv_len);
 
                     for k in 0..vvv_len {
-                        let c_str: &CStr = unsafe { CStr::from_ptr(vc[k]) };
-                        let str_slice: &str = c_str.to_str().unwrap();
-                        println!("[{}]: {}", k, str_slice);
+                        println!("[{}]: {}", k, ptr2str(vc[k]));
                     }
                 }
                 stat_directory_type_t_STAT_DIR_TYPE_EMPTY => {
