@@ -35,6 +35,7 @@ fn main() {
         .allowlist_function("clib_mem_init")
         .derive_debug(true)
         .derive_default(true)
+        .prepend_enum_name(false)
         .generate()
         // Finish the builder and generate the bindings.
         // Unwrap the Result and panic on failure.

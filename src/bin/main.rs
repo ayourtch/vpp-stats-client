@@ -57,16 +57,16 @@ fn do_dump(
         for i in 0..length {
             print!("Name: {} type: ", ptr2str(buf[i].name));
             match buf[i].type_ {
-                stat_directory_type_t_STAT_DIR_TYPE_ILLEGAL => {
+                STAT_DIR_TYPE_ILLEGAL => {
                     unimplemented!()
                 }
-                stat_directory_type_t_STAT_DIR_TYPE_SCALAR_INDEX => {
+                STAT_DIR_TYPE_SCALAR_INDEX => {
                     println!(
                         "SCALAR_INDEX : value {}",
                         buf[i].__bindgen_anon_1.scalar_value
                     );
                 }
-                stat_directory_type_t_STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
+                STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
                     println!("COUNTER_VECTOR_SIMPLE");
                     let vvv = buf[i].__bindgen_anon_1.simple_counter_vec;
                     let vvv_len = stat_segment_vec_len(vvv as *mut libc::c_void) as usize;
@@ -82,7 +82,7 @@ fn do_dump(
                         }
                     }
                 }
-                stat_directory_type_t_STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED => {
+                STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED => {
                     println!("COUNTER_VECTOR_COMBINED");
                     let vvv = buf[i].__bindgen_anon_1.combined_counter_vec;
                     let vvv_len = stat_segment_vec_len(vvv as *mut libc::c_void) as usize;
@@ -102,7 +102,7 @@ fn do_dump(
                         }
                     }
                 }
-                stat_directory_type_t_STAT_DIR_TYPE_NAME_VECTOR => {
+                STAT_DIR_TYPE_NAME_VECTOR => {
                     println!("NAME_VECTOR");
                     let vvv = buf[i].__bindgen_anon_1.name_vector as *mut *const i8;
                     let vvv_len = stat_segment_vec_len(vvv as *mut libc::c_void) as usize;
@@ -112,10 +112,10 @@ fn do_dump(
                         println!("[{}]: {}", k, ptr2str(vc[k]));
                     }
                 }
-                stat_directory_type_t_STAT_DIR_TYPE_EMPTY => {
+                STAT_DIR_TYPE_EMPTY => {
                     println!("EMPTY");
                 }
-                stat_directory_type_t_STAT_DIR_TYPE_SYMLINK => {
+                STAT_DIR_TYPE_SYMLINK => {
                     println!("SYMLINK");
                 }
                 7_u32..=u32::MAX => unimplemented!(),
