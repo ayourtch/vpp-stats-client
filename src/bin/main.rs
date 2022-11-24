@@ -86,6 +86,21 @@ fn do_dump(
                 }
                 stat_directory_type_t_STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED => {
                     println!("COUNTER_VECTOR_COMBINED");
+                    let vvv = buf[i].__bindgen_anon_1.combined_counter_vec;
+                    let vvv_len = stat_segment_vec_len(vvv as *mut libc::c_void) as usize;
+                    let vc : &[*mut vlib_counter_t] = core::slice::from_raw_parts_mut(vvv, vvv_len);
+
+                    for k in 0..vvv_len {
+                        let vvvj = vc[k];
+                        let vvvj_len = stat_segment_vec_len(vvvj as *mut libc::c_void) as usize;
+                        let vcj : &[vlib_counter_t] = core::slice::from_raw_parts_mut(vvvj, vvvj_len);
+
+                        for j in 0..vvvj_len {
+                            println!("     [ {} @ {} ]: {} packets, {} bytes", j, k, vcj[j].packets, vcj[j].bytes);
+                        }
+
+
+                    }
                 }
                 stat_directory_type_t_STAT_DIR_TYPE_NAME_VECTOR => {
                     println!("NAME_VECTOR");
