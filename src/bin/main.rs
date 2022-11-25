@@ -177,6 +177,7 @@ enum VppStatError {
 struct VppStatDir<'a> {
     client: &'a VppStatClient,
     dir_ptr: *const u32,
+    dir: &'a [u32],
 }
 
 struct VppStatData<'a> {
@@ -226,6 +227,31 @@ impl Drop for VppStatData<'_> {
     }
 }
 
+struct VppStatDirNamesIterator<'a> {
+    dir: &'a VppStatDir<'a>,
+    curr: usize,
+}
+
+impl<'a> Iterator for VppStatDirNamesIterator<'a> {
+    type Item = String;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.curr < self.dir.dir.len() {
+            let curr = self.curr;
+            self.curr = curr + 1;
+            let name = unsafe {
+                stat_segment_index_to_name_r(self.dir.dir[curr], self.dir.client.stat_client_ptr)
+            };
+            let out = ptr2str(name).to_string();
+            unsafe {
+                libc::free(name as *mut libc::c_void);
+            }
+            Some(out)
+        } else {
+            None
+        }
+    }
+}
+
 impl<'a> VppStatDir<'a> {
     fn dump(&'a self) -> VppStatData<'a> {
         let res =
@@ -238,6 +264,9 @@ impl<'a> VppStatDir<'a> {
             data_ptr: res,
             data: slice,
         }
+    }
+    fn names(&'a self) -> VppStatDirNamesIterator<'a> {
+        VppStatDirNamesIterator { dir: self, curr: 0 }
     }
 }
 
@@ -277,9 +306,11 @@ impl VppStatClient {
     fn ls(&self) -> VppStatDir {
         let patterns = std::ptr::null_mut();
         let dir_ptr = unsafe { stat_segment_ls_r(patterns, self.stat_client_ptr) };
+        let dir = vv2slice(dir_ptr);
         VppStatDir {
             client: &self,
             dir_ptr,
+            dir,
         } // FIXME: errors
     }
 }
@@ -298,27 +329,9 @@ fn main() {
 
     let c = VppStatClient::connect("/tmp/stats.sock").unwrap();
     let dir = c.ls();
-    /*
-    let buf = vv2slice(ptr);
-    for i in 0..length {
-        let name = unsafe { stat_segment_index_to_name_r(buf[i], sc) };
-        out.push(ptr2str(name).to_string());
+    for name in dir.names() {
+        println!("{}", name);
     }
-
-
-        let str_buf = check(
-            sc,
-            dir,
-            stat_segment_vec_len(dir as *mut libc::c_void) as usize,
-        );
-        */
-
-    // println!("{:?}", str_buf);
-    /*
-    for s in str_buf {
-        println!("{}", s);
-    }
-    */
 
     println!("running dump");
     let data = dir.dump();
