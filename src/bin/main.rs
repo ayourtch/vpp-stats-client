@@ -42,12 +42,6 @@ fn vv2slice<T>(vv: *const T) -> &'static [T] {
     }
 }
 
-#[no_mangle]
-fn check(sc: *mut stat_client_main_t, ptr: *mut u32, length: usize) -> Vec<String> {
-    let mut out: Vec<String> = vec![];
-    out
-}
-
 struct CounterComnbined {
     packets: u64,
     bytes: u64,
@@ -160,7 +154,7 @@ where
 }
 
 struct VppStatClient {
-    stat_client: *mut vpp_stat_client::sys::stat_client_main_t,
+    stat_client_ptr: *mut vpp_stat_client::sys::stat_client_main_t,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -174,7 +168,7 @@ enum VppStatError {
 
 struct VppStatDir<'a> {
     client: &'a VppStatClient,
-    dir: *const u32,
+    dir_ptr: *const u32,
 }
 
 struct VppStatData<'a> {
@@ -226,7 +220,8 @@ impl Drop for VppStatData<'_> {
 
 impl<'a> VppStatDir<'a> {
     fn dump(&'a self) -> VppStatData<'a> {
-        let res = unsafe { stat_segment_dump_r(self.dir as *mut u32, self.client.stat_client) };
+        let res =
+            unsafe { stat_segment_dump_r(self.dir_ptr as *mut u32, self.client.stat_client_ptr) };
         let res_len = unsafe { stat_segment_vec_len(res as *mut libc::c_void) as usize };
         let slice: &'a [vpp_stat_client::sys::stat_segment_data_t] =
             unsafe { core::slice::from_raw_parts(res, res_len) };
@@ -248,7 +243,9 @@ impl VppStatClient {
         let cstrpath = cpath.as_str() as *const str as *const [i8] as *const i8;
         let rv = unsafe { stat_segment_connect_r(cstrpath, sc) };
         match rv {
-            0 => Ok(VppStatClient { stat_client: sc }),
+            0 => Ok(VppStatClient {
+                stat_client_ptr: sc,
+            }),
             -1 => Err(CouldNotOpenSocket),
             -2 => Err(CouldNotConnect),
             -3 => Err(ReceivingFdFailed),
@@ -260,10 +257,10 @@ impl VppStatClient {
 
     fn ls(&self) -> VppStatDir {
         let patterns = std::ptr::null_mut();
-        let dir = unsafe { stat_segment_ls_r(patterns, self.stat_client) };
+        let dir_ptr = unsafe { stat_segment_ls_r(patterns, self.stat_client_ptr) };
         VppStatDir {
             client: &self,
-            dir: dir,
+            dir_ptr,
         } // FIXME: errors
     }
 }
@@ -271,8 +268,8 @@ impl VppStatClient {
 impl Drop for VppStatClient {
     fn drop(&mut self) {
         unsafe {
-            stat_segment_disconnect_r(self.stat_client);
-            stat_client_free(self.stat_client);
+            stat_segment_disconnect_r(self.stat_client_ptr);
+            stat_client_free(self.stat_client_ptr);
         }
     }
 }
@@ -312,7 +309,7 @@ fn main() {
         println!("running dump");
         let data = dir.dump();
         for item in data.iter() {
-            do_dump(data.dir.client.stat_client, item);
+            do_dump(data.dir.client.stat_client_ptr, item);
         }
     }
 }
