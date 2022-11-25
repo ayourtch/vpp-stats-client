@@ -28,6 +28,7 @@ macro_rules! ucstr_mut {
 use libc::c_char;
 use std::ffi::CStr;
 use std::fmt::Formatter;
+use std::ops::Index;
 use std::str;
 
 fn ptr2str(cstrptr: *const i8) -> &'static str {
@@ -49,28 +50,50 @@ struct CounterCombined {
     bytes: u64,
 }
 
-struct CounterSimpleVecVec<'a> {
-    vector_ptr: &'a [*mut u64],
-}
-
-struct CounterCombinedVecVec<'a> {
-    vector_ptr: &'a [*mut vlib_counter_t],
+struct CounterVecVec<'a, T> {
+    vector_ptr: &'a [*mut T],
 }
 
 struct NameVec<'a> {
     vector_ptr: &'a [*mut u8],
 }
 
-impl<'a> fmt::Debug for CounterSimpleVecVec<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CounterSimpleVecVec")
+use std::slice::SliceIndex;
+
+impl<'a, T> CounterVecVec<'a, T> {
+    fn len(&self) -> usize {
+        self.vector_ptr.len()
     }
 }
-impl<'a> fmt::Debug for CounterCombinedVecVec<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CounterCombinedVecVec")
+
+impl<'a> NameVec<'a> {
+    fn len(&self) -> usize {
+        self.vector_ptr.len()
     }
 }
+
+impl<'a, T> Index<usize> for CounterVecVec<'a, T> {
+    type Output = [T];
+
+    fn index(&self, index: usize) -> &Self::Output {
+        unsafe {
+            let vv = self.vector_ptr[index];
+            let vv_len = stat_segment_vec_len(vv as *mut libc::c_void) as usize;
+            let slice: &[T] = core::slice::from_raw_parts(vv, vv_len);
+            slice
+        }
+    }
+}
+
+impl<'a, T: std::fmt::Debug> fmt::Debug for CounterVecVec<'a, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for i in 0..self.len() {
+            write!(f, "{:?}", &self[i]);
+        }
+        Ok(())
+    }
+}
+
 impl<'a> fmt::Debug for NameVec<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "NameVec")
@@ -81,8 +104,8 @@ impl<'a> fmt::Debug for NameVec<'a> {
 enum StatValue<'a> {
     Illegal,
     ScalarIndex(f64),
-    CounterVectorSimple(CounterSimpleVecVec<'a>),
-    CounterVectorCombined(CounterCombinedVecVec<'a>),
+    CounterVectorSimple(CounterVecVec<'a, u64>),
+    CounterVectorCombined(CounterVecVec<'a, vlib_counter_t>),
     NameVector(NameVec<'a>),
     Empty,
     Symlink,
@@ -112,12 +135,12 @@ impl<'a> StatSegmentData<'a> {
             }
             STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
                 let vs = vv2slice(unsafe { item.__bindgen_anon_1.simple_counter_vec });
-                let val = CounterSimpleVecVec { vector_ptr: vs };
+                let val = CounterVecVec { vector_ptr: vs };
                 StatValue::CounterVectorSimple(val)
             }
             STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED => {
                 let vc = vv2slice(unsafe { item.__bindgen_anon_1.combined_counter_vec });
-                let val = CounterCombinedVecVec { vector_ptr: vc };
+                let val = CounterVecVec { vector_ptr: vc };
                 StatValue::CounterVectorCombined(val)
             }
             STAT_DIR_TYPE_NAME_VECTOR => {
@@ -138,62 +161,6 @@ impl<'a> StatSegmentData<'a> {
     }
 }
 
-fn do_dump(sc: *mut stat_client_main_t, item: &stat_segment_data_t) -> Vec<String> {
-    let mut out: Vec<String> = vec![];
-    print!("Name: {} type: ", ptr2str(item.name));
-    match item.type_ {
-        STAT_DIR_TYPE_ILLEGAL => {
-            unimplemented!()
-        }
-        STAT_DIR_TYPE_SCALAR_INDEX => {
-            println!("SCALAR_INDEX : value {}", unsafe {
-                item.__bindgen_anon_1.scalar_value
-            });
-        }
-        STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
-            println!("COUNTER_VECTOR_SIMPLE");
-            let vs = vv2slice(unsafe { item.__bindgen_anon_1.simple_counter_vec });
-
-            for k in 0..vs.len() {
-                let vss = vv2slice(vs[k]);
-                for j in 0..vss.len() {
-                    println!("     [ {} @ {} ]: {} packets", j, k, vss[j]);
-                }
-            }
-        }
-        STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED => {
-            println!("COUNTER_VECTOR_COMBINED");
-            let vc = vv2slice(unsafe { item.__bindgen_anon_1.combined_counter_vec });
-
-            for k in 0..vc.len() {
-                let vcs = vv2slice(vc[k]);
-
-                for j in 0..vcs.len() {
-                    println!(
-                        "     [ {} @ {} ]: {} packets, {} bytes",
-                        j, k, vcs[j].packets, vcs[j].bytes
-                    );
-                }
-            }
-        }
-        STAT_DIR_TYPE_NAME_VECTOR => {
-            println!("NAME_VECTOR");
-            let nv = vv2slice(unsafe { item.__bindgen_anon_1.name_vector });
-
-            for k in 0..nv.len() {
-                println!("[{}]: {}", k, ptr2str(nv[k] as *const i8));
-            }
-        }
-        STAT_DIR_TYPE_EMPTY => {
-            println!("EMPTY");
-        }
-        STAT_DIR_TYPE_SYMLINK => {
-            println!("SYMLINK");
-        }
-        7_u32..=u32::MAX => unimplemented!(),
-    }
-    out
-}
 use std::arch::asm;
 
 /* https://lukas-prokop.at/articles/2021-11-10-rdtsc-with-rust-asm */
@@ -393,19 +360,40 @@ impl Drop for VppStatClient {
 }
 
 fn main() {
+    use crate::StatValue::*;
     VppStatClient::init_once(None);
 
     let c = VppStatClient::connect("/tmp/stats.sock").unwrap();
     let dir = c.ls();
     for name in dir.names() {
-        println!("{}", name);
+        //     println!("{}", name);
     }
 
     println!("running dump");
     let data = dir.dump();
     for item in data.iter() {
-        do_dump(data.dir.client.stat_client_ptr, item);
         let item = StatSegmentData::from_ctype(data.dir.client.stat_client_ptr, item);
-        println!("{:?}", item);
+        match item.value {
+            ScalarIndex(val) => {
+                println!("{}: {}", item.name, val);
+            }
+            CounterVectorSimple(cvs) => {
+                for i in 0..cvs.len() {
+                    println!("{}[{}]: {:?}", item.name, i, &cvs[i]);
+                }
+            }
+            CounterVectorCombined(cvc) => {
+                for i in 0..cvc.len() {
+                    print!("{}[{}]: ", item.name, i);
+                    for v in &cvc[i] {
+                        print!("({} pkt, {} bytes)", v.packets, v.bytes);
+                    }
+                    println!("");
+                }
+            }
+            NameVector(nv) => {}
+            _ => unimplemented!(),
+        }
+        // println!("{:?}", item);
     }
 }
