@@ -234,6 +234,17 @@ impl<'a> VppStatDir<'a> {
 }
 
 impl VppStatClient {
+    /* This will likely change - it is not a good ergonomics to require to call this */
+    fn init_once(memsize: Option<usize>) {
+        let memsize = if let Some(mem) = memsize {
+            mem
+        } else {
+            64000000
+        };
+        unsafe {
+            clib_mem_init(std::ptr::null_mut(), 64000000);
+        }
+    }
     fn connect(path: &str) -> Result<Self, VppStatError> {
         use crate::VppStatError::*;
         use vpp_stat_client::sys::*;
@@ -275,41 +286,35 @@ impl Drop for VppStatClient {
 }
 
 fn main() {
-    unsafe {
-        let data = [0u8; 128];
+    VppStatClient::init_once(None);
 
-        clib_mem_init(std::ptr::null_mut(), 64000000);
-
-        println!("running dir");
-
-        let c = VppStatClient::connect("/tmp/stats.sock").unwrap();
-        let dir = c.ls();
-        /*
-        let buf = vv2slice(ptr);
-        for i in 0..length {
-            let name = unsafe { stat_segment_index_to_name_r(buf[i], sc) };
-            out.push(ptr2str(name).to_string());
-        }
+    let c = VppStatClient::connect("/tmp/stats.sock").unwrap();
+    let dir = c.ls();
+    /*
+    let buf = vv2slice(ptr);
+    for i in 0..length {
+        let name = unsafe { stat_segment_index_to_name_r(buf[i], sc) };
+        out.push(ptr2str(name).to_string());
+    }
 
 
-            let str_buf = check(
-                sc,
-                dir,
-                stat_segment_vec_len(dir as *mut libc::c_void) as usize,
-            );
-            */
-
-        // println!("{:?}", str_buf);
-        /*
-        for s in str_buf {
-            println!("{}", s);
-        }
+        let str_buf = check(
+            sc,
+            dir,
+            stat_segment_vec_len(dir as *mut libc::c_void) as usize,
+        );
         */
 
-        println!("running dump");
-        let data = dir.dump();
-        for item in data.iter() {
-            do_dump(data.dir.client.stat_client_ptr, item);
-        }
+    // println!("{:?}", str_buf);
+    /*
+    for s in str_buf {
+        println!("{}", s);
+    }
+    */
+
+    println!("running dump");
+    let data = dir.dump();
+    for item in data.iter() {
+        do_dump(data.dir.client.stat_client_ptr, item);
     }
 }
