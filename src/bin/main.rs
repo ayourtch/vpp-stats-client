@@ -1,4 +1,5 @@
 use std::fmt;
+
 use vpp_stat_client::sys::*;
 
 macro_rules! cstr {
@@ -50,29 +51,19 @@ struct CounterCombined {
     bytes: u64,
 }
 
-struct CounterVecVec<'a, T> {
+struct DataVecVec<'a, T> {
     vector_ptr: &'a [*mut T],
-}
-
-struct NameVec<'a> {
-    vector_ptr: &'a [*mut u8],
 }
 
 use std::slice::SliceIndex;
 
-impl<'a, T> CounterVecVec<'a, T> {
+impl<'a, T> DataVecVec<'a, T> {
     fn len(&self) -> usize {
         self.vector_ptr.len()
     }
 }
 
-impl<'a> NameVec<'a> {
-    fn len(&self) -> usize {
-        self.vector_ptr.len()
-    }
-}
-
-impl<'a, T> Index<usize> for CounterVecVec<'a, T> {
+impl<'a, T> Index<usize> for DataVecVec<'a, T> {
     type Output = [T];
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -85,7 +76,7 @@ impl<'a, T> Index<usize> for CounterVecVec<'a, T> {
     }
 }
 
-impl<'a, T: std::fmt::Debug> fmt::Debug for CounterVecVec<'a, T> {
+impl<'a, T: std::fmt::Debug> fmt::Debug for DataVecVec<'a, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for i in 0..self.len() {
             write!(f, "{:?}", &self[i]);
@@ -94,19 +85,13 @@ impl<'a, T: std::fmt::Debug> fmt::Debug for CounterVecVec<'a, T> {
     }
 }
 
-impl<'a> fmt::Debug for NameVec<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "NameVec")
-    }
-}
-
 #[derive(Debug)]
 enum StatValue<'a> {
     Illegal,
     ScalarIndex(f64),
-    CounterVectorSimple(CounterVecVec<'a, u64>),
-    CounterVectorCombined(CounterVecVec<'a, vlib_counter_t>),
-    NameVector(NameVec<'a>),
+    CounterVectorSimple(DataVecVec<'a, u64>),
+    CounterVectorCombined(DataVecVec<'a, vlib_counter_t>),
+    NameVector(DataVecVec<'a, u8>),
     Empty,
     Symlink,
 }
@@ -135,17 +120,17 @@ impl<'a> StatSegmentData<'a> {
             }
             STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
                 let vs = vv2slice(unsafe { item.__bindgen_anon_1.simple_counter_vec });
-                let val = CounterVecVec { vector_ptr: vs };
+                let val = DataVecVec { vector_ptr: vs };
                 StatValue::CounterVectorSimple(val)
             }
             STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED => {
                 let vc = vv2slice(unsafe { item.__bindgen_anon_1.combined_counter_vec });
-                let val = CounterVecVec { vector_ptr: vc };
+                let val = DataVecVec { vector_ptr: vc };
                 StatValue::CounterVectorCombined(val)
             }
             STAT_DIR_TYPE_NAME_VECTOR => {
                 let nv = vv2slice(unsafe { item.__bindgen_anon_1.name_vector });
-                let val = NameVec { vector_ptr: nv };
+                let val = DataVecVec { vector_ptr: nv };
                 StatValue::NameVector(val)
             }
             STAT_DIR_TYPE_EMPTY => StatValue::Empty,
@@ -361,6 +346,8 @@ impl Drop for VppStatClient {
 
 fn main() {
     use crate::StatValue::*;
+    use std::ffi::CStr;
+
     VppStatClient::init_once(None);
 
     let c = VppStatClient::connect("/tmp/stats.sock").unwrap();
@@ -391,7 +378,12 @@ fn main() {
                     println!("");
                 }
             }
-            NameVector(nv) => {}
+            NameVector(nv) => {
+                for i in 0..nv.len() {
+                    let value = CStr::from_bytes_with_nul(&nv[i]).unwrap().to_str().unwrap();
+                    println!("{}[{}]: {:?}", item.name, i, value);
+                }
+            }
             _ => unimplemented!(),
         }
         // println!("{:?}", item);
