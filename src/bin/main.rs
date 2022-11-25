@@ -68,62 +68,59 @@ struct StatSegmentData<'a> {
     val: StatValue<'a>,
 }
 
-fn do_dump(sc: *mut stat_client_main_t, ptr: *const stat_segment_data_t) -> Vec<String> {
+fn do_dump(sc: *mut stat_client_main_t, item: &stat_segment_data_t) -> Vec<String> {
     let mut out: Vec<String> = vec![];
-    let buf = vv2slice(ptr);
-    for i in 0..buf.len() {
-        print!("Name: {} type: ", ptr2str(buf[i].name));
-        match buf[i].type_ {
-            STAT_DIR_TYPE_ILLEGAL => {
-                unimplemented!()
-            }
-            STAT_DIR_TYPE_SCALAR_INDEX => {
-                println!("SCALAR_INDEX : value {}", unsafe {
-                    buf[i].__bindgen_anon_1.scalar_value
-                });
-            }
-            STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
-                println!("COUNTER_VECTOR_SIMPLE");
-                let vs = vv2slice(unsafe { buf[i].__bindgen_anon_1.simple_counter_vec });
-
-                for k in 0..vs.len() {
-                    let vss = vv2slice(vs[k]);
-                    for j in 0..vss.len() {
-                        println!("     [ {} @ {} ]: {} packets", j, k, vss[j]);
-                    }
-                }
-            }
-            STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED => {
-                println!("COUNTER_VECTOR_COMBINED");
-                let vc = vv2slice(unsafe { buf[i].__bindgen_anon_1.combined_counter_vec });
-
-                for k in 0..vc.len() {
-                    let vcs = vv2slice(vc[k]);
-
-                    for j in 0..vcs.len() {
-                        println!(
-                            "     [ {} @ {} ]: {} packets, {} bytes",
-                            j, k, vcs[j].packets, vcs[j].bytes
-                        );
-                    }
-                }
-            }
-            STAT_DIR_TYPE_NAME_VECTOR => {
-                println!("NAME_VECTOR");
-                let nv = vv2slice(unsafe { buf[i].__bindgen_anon_1.name_vector });
-
-                for k in 0..nv.len() {
-                    println!("[{}]: {}", k, ptr2str(nv[k] as *const i8));
-                }
-            }
-            STAT_DIR_TYPE_EMPTY => {
-                println!("EMPTY");
-            }
-            STAT_DIR_TYPE_SYMLINK => {
-                println!("SYMLINK");
-            }
-            7_u32..=u32::MAX => unimplemented!(),
+    print!("Name: {} type: ", ptr2str(item.name));
+    match item.type_ {
+        STAT_DIR_TYPE_ILLEGAL => {
+            unimplemented!()
         }
+        STAT_DIR_TYPE_SCALAR_INDEX => {
+            println!("SCALAR_INDEX : value {}", unsafe {
+                item.__bindgen_anon_1.scalar_value
+            });
+        }
+        STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
+            println!("COUNTER_VECTOR_SIMPLE");
+            let vs = vv2slice(unsafe { item.__bindgen_anon_1.simple_counter_vec });
+
+            for k in 0..vs.len() {
+                let vss = vv2slice(vs[k]);
+                for j in 0..vss.len() {
+                    println!("     [ {} @ {} ]: {} packets", j, k, vss[j]);
+                }
+            }
+        }
+        STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED => {
+            println!("COUNTER_VECTOR_COMBINED");
+            let vc = vv2slice(unsafe { item.__bindgen_anon_1.combined_counter_vec });
+
+            for k in 0..vc.len() {
+                let vcs = vv2slice(vc[k]);
+
+                for j in 0..vcs.len() {
+                    println!(
+                        "     [ {} @ {} ]: {} packets, {} bytes",
+                        j, k, vcs[j].packets, vcs[j].bytes
+                    );
+                }
+            }
+        }
+        STAT_DIR_TYPE_NAME_VECTOR => {
+            println!("NAME_VECTOR");
+            let nv = vv2slice(unsafe { item.__bindgen_anon_1.name_vector });
+
+            for k in 0..nv.len() {
+                println!("[{}]: {}", k, ptr2str(nv[k] as *const i8));
+            }
+        }
+        STAT_DIR_TYPE_EMPTY => {
+            println!("EMPTY");
+        }
+        STAT_DIR_TYPE_SYMLINK => {
+            println!("SYMLINK");
+        }
+        7_u32..=u32::MAX => unimplemented!(),
     }
     out
 }
@@ -182,12 +179,47 @@ struct VppStatDir<'a> {
 
 struct VppStatData<'a> {
     dir: &'a VppStatDir<'a>,
-    data: *const vpp_stat_client::sys::stat_segment_data_t,
+    data_ptr: *const vpp_stat_client::sys::stat_segment_data_t,
+    data: &'a [vpp_stat_client::sys::stat_segment_data_t],
 }
+
+struct VppStatDataIterator<'a> {
+    stat_data: &'a VppStatData<'a>,
+    curr: usize,
+}
+
+impl<'a> Iterator for VppStatDataIterator<'a> {
+    type Item = &'a vpp_stat_client::sys::stat_segment_data_t;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.curr < self.stat_data.len() {
+            let curr = self.curr;
+            self.curr = curr + 1;
+            Some(&self.stat_data.data[curr])
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a> VppStatData<'a> {
+    fn iter(&'a self) -> VppStatDataIterator {
+        VppStatDataIterator {
+            stat_data: self,
+            curr: 0,
+        }
+    }
+    fn len(&self) -> usize {
+        self.data.len()
+    }
+    fn is_empty(&self) -> bool {
+        self.data.len() == 0
+    }
+}
+
 impl Drop for VppStatData<'_> {
     fn drop(&mut self) {
         unsafe {
-            stat_segment_data_free(self.data as *mut vpp_stat_client::sys::stat_segment_data_t)
+            stat_segment_data_free(self.data_ptr as *mut vpp_stat_client::sys::stat_segment_data_t)
         };
     }
 }
@@ -195,9 +227,13 @@ impl Drop for VppStatData<'_> {
 impl<'a> VppStatDir<'a> {
     fn dump(&'a self) -> VppStatData<'a> {
         let res = unsafe { stat_segment_dump_r(self.dir as *mut u32, self.client.stat_client) };
+        let res_len = unsafe { stat_segment_vec_len(res as *mut libc::c_void) as usize };
+        let slice: &'a [vpp_stat_client::sys::stat_segment_data_t] =
+            unsafe { core::slice::from_raw_parts(res, res_len) };
         VppStatData {
             dir: self,
-            data: res,
+            data_ptr: res,
+            data: slice,
         }
     }
 }
@@ -275,6 +311,8 @@ fn main() {
 
         println!("running dump");
         let data = dir.dump();
-        do_dump(data.dir.client.stat_client, data.data);
+        for item in data.iter() {
+            do_dump(data.dir.client.stat_client, item);
+        }
     }
 }
