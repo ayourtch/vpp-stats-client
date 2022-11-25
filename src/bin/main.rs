@@ -55,6 +55,10 @@ struct DataVecVec<'a, T> {
     vector_ptr: &'a [*mut T],
 }
 
+struct NameVec<'a> {
+    vector_ptr: &'a [*mut u8],
+}
+
 use std::slice::SliceIndex;
 
 impl<'a, T> DataVecVec<'a, T> {
@@ -85,13 +89,41 @@ impl<'a, T: std::fmt::Debug> fmt::Debug for DataVecVec<'a, T> {
     }
 }
 
+impl<'a> NameVec<'a> {
+    fn len(&self) -> usize {
+        self.vector_ptr.len()
+    }
+}
+
+impl<'a> Index<usize> for NameVec<'a> {
+    type Output = str;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        unsafe {
+            let vv = self.vector_ptr[index];
+            let c_str: &CStr = unsafe { CStr::from_ptr(vv as *const i8) };
+            let slice: &str = c_str.to_str().unwrap();
+            slice
+        }
+    }
+}
+
+impl<'a> fmt::Debug for NameVec<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for i in 0..self.len() {
+            write!(f, "{:?} ", &self[i]);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 enum StatValue<'a> {
     Illegal,
     ScalarIndex(f64),
     CounterVectorSimple(DataVecVec<'a, u64>),
     CounterVectorCombined(DataVecVec<'a, vlib_counter_t>),
-    NameVector(DataVecVec<'a, u8>),
+    NameVector(NameVec<'a>),
     Empty,
     Symlink,
 }
@@ -130,7 +162,7 @@ impl<'a> StatSegmentData<'a> {
             }
             STAT_DIR_TYPE_NAME_VECTOR => {
                 let nv = vv2slice(unsafe { item.__bindgen_anon_1.name_vector });
-                let val = DataVecVec { vector_ptr: nv };
+                let val = NameVec { vector_ptr: nv };
                 StatValue::NameVector(val)
             }
             STAT_DIR_TYPE_EMPTY => StatValue::Empty,
@@ -383,8 +415,7 @@ fn main() {
             }
             NameVector(nv) => {
                 for i in 0..nv.len() {
-                    let value = CStr::from_bytes_with_nul(&nv[i]).unwrap().to_str().unwrap();
-                    println!("{}[{}]: {:?}", item.name, i, value);
+                    println!("{}[{}]: {:?}", item.name, i, &nv[i]);
                 }
             }
             _ => unimplemented!(),
