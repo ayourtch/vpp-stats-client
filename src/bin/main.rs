@@ -212,12 +212,16 @@ struct VppStatDataIterator<'a> {
 }
 
 impl<'a> Iterator for VppStatDataIterator<'a> {
-    type Item = &'a vpp_stat_client::sys::stat_segment_data_t;
+    type Item = StatSegmentData<'a>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.curr < self.stat_data.len() {
             let curr = self.curr;
             self.curr = curr + 1;
-            Some(&self.stat_data.data[curr])
+            let cptr = self.stat_data.dir.client.stat_client_ptr;
+            Some(StatSegmentData::from_ctype(
+                cptr,
+                &self.stat_data.data[curr],
+            ))
         } else {
             None
         }
@@ -359,7 +363,6 @@ fn main() {
     println!("running dump");
     let data = dir.dump();
     for item in data.iter() {
-        let item = StatSegmentData::from_ctype(data.dir.client.stat_client_ptr, item);
         match item.value {
             ScalarIndex(val) => {
                 println!("{}: {}", item.name, val);
