@@ -1,3 +1,4 @@
+use std::fmt;
 use vpp_stat_client::sys::*;
 
 macro_rules! cstr {
@@ -26,6 +27,7 @@ macro_rules! ucstr_mut {
 
 use libc::c_char;
 use std::ffi::CStr;
+use std::fmt::Formatter;
 use std::str;
 
 fn ptr2str(cstrptr: *const i8) -> &'static str {
@@ -42,32 +44,98 @@ fn vv2slice<T>(vv: *const T) -> &'static [T] {
     }
 }
 
-struct CounterComnbined {
+struct CounterCombined {
     packets: u64,
     bytes: u64,
 }
 
 struct CounterSimpleVecVec<'a> {
-    vector_ptr: &'a [*const u64],
+    vector_ptr: &'a [*mut u64],
 }
 
 struct CounterCombinedVecVec<'a> {
-    vector_ptr: &'a [*const vlib_counter_t],
+    vector_ptr: &'a [*mut vlib_counter_t],
 }
 
+struct NameVec<'a> {
+    vector_ptr: &'a [*mut u8],
+}
+
+impl<'a> fmt::Debug for CounterSimpleVecVec<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CounterSimpleVecVec")
+    }
+}
+impl<'a> fmt::Debug for CounterCombinedVecVec<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CounterCombinedVecVec")
+    }
+}
+impl<'a> fmt::Debug for NameVec<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "NameVec")
+    }
+}
+
+#[derive(Debug)]
 enum StatValue<'a> {
     Illegal,
     ScalarIndex(f64),
     CounterVectorSimple(CounterSimpleVecVec<'a>),
     CounterVectorCombined(CounterCombinedVecVec<'a>),
-    NameVector(&'a [*const i8]),
+    NameVector(NameVec<'a>),
     Empty,
     Symlink,
 }
 
 struct StatSegmentData<'a> {
+    orig_data: &'a stat_segment_data_t,
     name: &'a str,
-    val: StatValue<'a>,
+    value: StatValue<'a>,
+}
+impl<'a> fmt::Debug for StatSegmentData<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {:?}", self.name, self.value)
+    }
+}
+
+impl<'a> StatSegmentData<'a> {
+    fn from_ctype(sc: *mut stat_client_main_t, item: &'a stat_segment_data_t) -> Self {
+        let c_str: &CStr = unsafe { CStr::from_ptr(item.name) };
+        let name: &str = c_str.to_str().unwrap();
+
+        let value = match item.type_ {
+            STAT_DIR_TYPE_ILLEGAL => StatValue::Illegal,
+            STAT_DIR_TYPE_SCALAR_INDEX => {
+                let val = unsafe { item.__bindgen_anon_1.scalar_value };
+                StatValue::ScalarIndex(val)
+            }
+            STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
+                let vs = vv2slice(unsafe { item.__bindgen_anon_1.simple_counter_vec });
+                let val = CounterSimpleVecVec { vector_ptr: vs };
+                StatValue::CounterVectorSimple(val)
+            }
+            STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED => {
+                let vc = vv2slice(unsafe { item.__bindgen_anon_1.combined_counter_vec });
+                let val = CounterCombinedVecVec { vector_ptr: vc };
+                StatValue::CounterVectorCombined(val)
+            }
+            STAT_DIR_TYPE_NAME_VECTOR => {
+                let nv = vv2slice(unsafe { item.__bindgen_anon_1.name_vector });
+                let val = NameVec { vector_ptr: nv };
+                StatValue::NameVector(val)
+            }
+            STAT_DIR_TYPE_EMPTY => StatValue::Empty,
+            STAT_DIR_TYPE_SYMLINK => StatValue::Symlink,
+            7_u32..=u32::MAX => unimplemented!(),
+        };
+
+        StatSegmentData {
+            orig_data: item,
+            name,
+            value,
+        }
+    }
 }
 
 fn do_dump(sc: *mut stat_client_main_t, item: &stat_segment_data_t) -> Vec<String> {
@@ -337,5 +405,7 @@ fn main() {
     let data = dir.dump();
     for item in data.iter() {
         do_dump(data.dir.client.stat_client_ptr, item);
+        let item = StatSegmentData::from_ctype(data.dir.client.stat_client_ptr, item);
+        println!("{:?}", item);
     }
 }
