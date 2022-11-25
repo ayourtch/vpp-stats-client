@@ -47,11 +47,19 @@ struct CounterComnbined {
     bytes: u64,
 }
 
+struct CounterSimpleVecVec<'a> {
+    vector_ptr: &'a [*const u64],
+}
+
+struct CounterCombinedVecVec<'a> {
+    vector_ptr: &'a [*const vlib_counter_t],
+}
+
 enum StatValue<'a> {
     Illegal,
     ScalarIndex(f64),
-    CounterVectorSimple(&'a [*const u64]),
-    CounterVectorCombined(&'a [*const vlib_counter_t]),
+    CounterVectorSimple(CounterSimpleVecVec<'a>),
+    CounterVectorCombined(CounterCombinedVecVec<'a>),
     NameVector(&'a [*const i8]),
     Empty,
     Symlink,
