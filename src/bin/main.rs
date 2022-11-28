@@ -226,13 +226,74 @@ enum VppStatError {
     MmapMapFailed,
 }
 
+struct VppStringVec {
+    vvec_ptr: *mut *mut u8,
+}
+
+impl VppStringVec {
+    fn new() -> Self {
+        let vvec_ptr = std::ptr::null_mut();
+        VppStringVec { vvec_ptr }
+    }
+
+    fn push(&mut self, s: &str) {
+        let cs = format!("{}\0", s);
+        let cstr_ptr = cs.as_str() as *const str as *const [i8] as *const i8;
+        self.vvec_ptr = unsafe { stat_segment_string_vector(self.vvec_ptr, cstr_ptr) };
+    }
+
+    fn len(&self) -> usize {
+        let vv_len = unsafe { stat_segment_vec_len(self.vvec_ptr as *mut libc::c_void) as usize };
+        vv_len
+    }
+}
+
+impl Index<usize> for VppStringVec {
+    type Output = str;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        unsafe {
+            let vv_len = stat_segment_vec_len(self.vvec_ptr as *mut libc::c_void) as usize;
+            let slice: &[*mut u8] = core::slice::from_raw_parts(self.vvec_ptr, vv_len);
+
+            let vv = slice[index];
+            let c_str: &CStr = unsafe { CStr::from_ptr(vv as *const i8) };
+            let slice: &str = c_str.to_str().unwrap();
+            slice
+        }
+    }
+}
+
+impl fmt::Debug for VppStringVec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for i in 0..self.len() {
+            write!(f, "{:?} ", &self[i]);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for VppStringVec {
+    fn drop(&mut self) {
+        unsafe {
+            let vv_len = stat_segment_vec_len(self.vvec_ptr as *mut libc::c_void) as usize;
+            let slice: &[*mut u8] = core::slice::from_raw_parts(self.vvec_ptr, vv_len);
+            for i in 0..slice.len() {
+                let vv = slice[i];
+                stat_segment_vec_free(vv as *mut libc::c_void);
+            }
+            stat_segment_vec_free(self.vvec_ptr as *mut libc::c_void);
+        };
+    }
+}
+
 struct VppStatDir<'a> {
     client: &'a VppStatClient,
     dir_ptr: *const u32,
     dir: &'a [u32],
 }
 
-impl Drop for VppStatDir <'_> {
+impl Drop for VppStatDir<'_> {
     fn drop(&mut self) {
         unsafe {
             stat_segment_vec_free(self.dir_ptr as *mut libc::c_void);
@@ -367,8 +428,12 @@ impl VppStatClient {
         }
     }
 
-    fn ls(&self) -> VppStatDir {
-        let patterns = std::ptr::null_mut();
+    fn ls(&self, patterns: Option<&VppStringVec>) -> VppStatDir {
+        let patterns = if let Some(v) = patterns {
+            v.vvec_ptr
+        } else {
+            std::ptr::null_mut()
+        };
         let dir_ptr = unsafe { stat_segment_ls_r(patterns, self.stat_client_ptr) };
         let dir = vv2slice(dir_ptr);
         VppStatDir {
@@ -395,13 +460,20 @@ fn main() {
     VppStatClient::init_once(None);
 
     let c = VppStatClient::connect("/tmp/stats.sock").unwrap();
-    let dir = c.ls();
+
+    let mut patterns = VppStringVec::new();
+    patterns.push("main");
+    patterns.push(".*");
+    println!("Patterns: {:?}", &patterns);
+    let dir = c.ls(Some(&patterns));
+    // let dir = c.ls(None);
     for name in dir.names() {
         //     println!("{}", name);
     }
 
     println!("running dump");
     let data = dir.dump();
+
     for item in data.iter() {
         match item.value {
             ScalarIndex(val) => {
