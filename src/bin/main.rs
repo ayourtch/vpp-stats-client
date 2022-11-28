@@ -464,6 +464,9 @@ fn main() {
     let mut patterns = VppStringVec::new();
     patterns.push("main");
     patterns.push(".*");
+    patterns.push("/err/ikev2-ip4/ike_auth_req");
+    patterns.push("/if/names");
+    patterns.push("/bfd/udp4/sessions");
     println!("Patterns: {:?}", &patterns);
     let dir = c.ls(Some(&patterns));
     // let dir = c.ls(None);
