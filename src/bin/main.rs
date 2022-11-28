@@ -232,6 +232,14 @@ struct VppStatDir<'a> {
     dir: &'a [u32],
 }
 
+impl Drop for VppStatDir <'_> {
+    fn drop(&mut self) {
+        unsafe {
+            stat_segment_vec_free(self.dir_ptr as *mut libc::c_void);
+        };
+    }
+}
+
 struct VppStatData<'a> {
     dir: &'a VppStatDir<'a>,
     data_ptr: *const vpp_stat_client::sys::stat_segment_data_t,
