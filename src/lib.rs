@@ -316,7 +316,7 @@ impl Drop for VppStatDir<'_> {
 }
 
 pub struct VppStatData<'a> {
-    dir: &'a VppStatDir<'a>,
+    stat_client_ptr: *mut sys::stat_client_main_t,
     data_ptr: *const sys::stat_segment_data_t,
     data: &'a [sys::stat_segment_data_t],
 }
@@ -332,7 +332,7 @@ impl<'a> Iterator for VppStatDataIterator<'a> {
         if self.curr < self.stat_data.len() {
             let curr = self.curr;
             self.curr = curr + 1;
-            let cptr = self.stat_data.dir.client.stat_client_ptr;
+            let cptr = self.stat_data.stat_client_ptr;
             Some(StatSegmentData::from_ctype(
                 cptr,
                 &self.stat_data.data[curr],
@@ -389,18 +389,27 @@ impl<'a> Iterator for VppStatDirNamesIterator<'a> {
     }
 }
 
-impl<'a> VppStatDir<'a> {
-    pub fn dump(&'a self) -> VppStatData<'a> {
+pub enum VppStatDumpError {
+    ObsoleteDirData,
+}
+
+impl<'a, 'b: 'a> VppStatDir<'a> {
+    pub fn dump(&'a self) -> Result<VppStatData<'b>, VppStatDumpError> {
+        use crate::VppStatDumpError::ObsoleteDirData;
         let res =
             unsafe { stat_segment_dump_r(self.dir_ptr as *mut u32, self.client.stat_client_ptr) };
+        if res == std::ptr::null_mut() {
+            return Err(ObsoleteDirData);
+        }
         let res_len = unsafe { stat_segment_vec_len(res as *mut libc::c_void) as usize };
-        let slice: &'a [sys::stat_segment_data_t] =
+        let slice: &'b [sys::stat_segment_data_t] =
             unsafe { core::slice::from_raw_parts(res, res_len) };
-        VppStatData {
-            dir: self,
+        Ok(VppStatData {
+            // dir: self,
+            stat_client_ptr: self.client.stat_client_ptr,
             data_ptr: res,
             data: slice,
-        }
+        })
     }
     pub fn names(&'a self) -> VppStatDirNamesIterator<'a> {
         VppStatDirNamesIterator { dir: self, curr: 0 }
