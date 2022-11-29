@@ -10,7 +10,11 @@ be set to the directory where the .so files are, and VPP_INC_DIR to be set
 where the include files are. For running, the LD_LIBRARY_PATH might need
 to also be set, such that the .so files were found by the linker.
 
-If you are building locally using "make build", with ~/vpp being your VPP directory
+If you have installed VPP from the packages (you will need to ensure
+that you have vpp-dev and python3-vpp-api installed), then you might
+get away with the default values.
+
+If you are building VPP locally using "make build", with ~/vpp being your VPP directory
 as your checkout directory, then the values will be as follows:
 
 ```
@@ -25,5 +29,11 @@ This example will show the naive usage of stats in order to print the data:
 
 ```
 cargo run --example dump-all
+```
+
+But before that, you will need to start up the VPP with the following config for the stat segment:
+
+```
+statseg { size 32m socket-name /tmp/stats.sock }
 ```
 
