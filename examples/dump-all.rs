@@ -1,7 +1,6 @@
 use vpp_stat_client::*;
 
 fn main() {
-
     let c = VppStatClient::connect("/tmp/stats.sock").unwrap();
 
     let mut patterns = VppStringVec::new();
@@ -13,7 +12,7 @@ fn main() {
     println!("Patterns: {:?}", &patterns);
     let dir = c.ls(Some(&patterns));
     for name in dir.names() {
-       // println!("{}", name);
+        // println!("{}", name);
     }
 
     println!("running dump");

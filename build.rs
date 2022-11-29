@@ -1,6 +1,5 @@
 extern crate bindgen;
 
-use bindgen::builder;
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
@@ -14,20 +13,32 @@ fn find_vpp_lib_dir() -> String {
     path
 }
 
-fn main() {
-    // Tell cargo to tell rustc to link the system bzip2
-    // shared library.
-    //println!("cargo:rustc-link-lib=bz2");
+fn find_vpp_include_dir() -> String {
+    let path = "/usr/include".to_string();
+    path
+}
 
-    // The bindgen::Builder is the main entry point
-    // to bindgen, and lets you build up options for
-    // the resulting bindings.
-    // let mut bindings = bindgen::Builder::default()
-    let mut bindings = bindgen::Builder::default()
+fn main() {
+    let vpp_include_dir = match env::var("VPP_INC_DIR") {
+        Ok(val) => val,
+        Err(_e) => find_vpp_include_dir(),
+    };
+    if !std::path::Path::new(&format!("{}/vlib/vlib.h", &vpp_include_dir)).exists() {
+        panic!("Can not find vlib/vlib.h at {}, please install vpp-dev package or define VPP_INC_DIR accordingly", vpp_include_dir)
+    }
+    let vpp_lib_dir = match env::var("VPP_LIB_DIR") {
+        Ok(val) => val,
+        Err(_e) => find_vpp_lib_dir(),
+    };
+    if !std::path::Path::new(&format!("{}/libvppapiclient.so", &vpp_lib_dir)).exists() {
+        panic!("Can not find libvppapiclient.so at {}, please install python3-vpp-api package or define VPP_LIB_DIR accordingly", vpp_lib_dir)
+    }
+
+    let bindings = bindgen::Builder::default()
         // The input header we would like to generate
         // bindings for.
         .header("wrapper.h")
-        .clang_arg("-I/home/ubuntu/vpp/build-root/install-vpp_debug-native/vpp/include")
+        .clang_arg(format!("-I{}", &vpp_include_dir))
         .no_convert_floats()
         .allowlist_type("stat_.*")
         .allowlist_type("vec_header_t")
@@ -58,17 +69,10 @@ fn main() {
         .write_to_file(out_file_name.clone())
         .expect("Couldn't write bindings!");
 
-    Command::new("rustup")
+    let _res = Command::new("rustup")
         .args(&["run", "nightly", "rustfmt", out_file_name.to_str().unwrap()])
         .status(); // .unwrap();
 
-    let vpp_lib_dir = match env::var("VPP_LIB_DIR") {
-        Ok(val) => val,
-        Err(_e) => find_vpp_lib_dir(),
-    };
-    if !std::path::Path::new(&format!("{}/libvppapiclient.so", &vpp_lib_dir)).exists() {
-        panic!("Can not find libvppapiclient.so at {}, please install python3-vpp-api or define VPP_LIB_DIR accordingly", vpp_lib_dir)
-    }
     let flags = format!(
         "cargo:rustc-flags=-L{} -lvppapiclient -lvppinfra",
         &vpp_lib_dir
