@@ -1,10 +1,7 @@
 use vpp_stat_client::*;
 
 fn main() {
-    use std::ffi::CStr;
     use vpp_stat_client::StatValue::*;
-
-    VppStatClient::init_once(None);
 
     let c = VppStatClient::connect("/tmp/stats.sock").unwrap();
 

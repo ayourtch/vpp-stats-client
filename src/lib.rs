@@ -423,6 +423,12 @@ impl VppStatClient {
         use crate::VppStatError::*;
         use sys::*;
 
+        static START: std::sync::Once = std::sync::Once::new();
+
+        START.call_once(|| {
+            VppStatClient::init_once(None);
+        });
+
         let sc = unsafe { stat_client_get() };
         let cpath = format!("{}\0", path);
         let cstrpath = cpath.as_str() as *const str as *const [i8] as *const i8;
