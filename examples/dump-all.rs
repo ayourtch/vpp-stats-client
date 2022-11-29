@@ -1,7 +1,6 @@
 use vpp_stat_client::*;
 
 fn main() {
-    use vpp_stat_client::StatValue::*;
 
     let c = VppStatClient::connect("/tmp/stats.sock").unwrap();
 
@@ -13,15 +12,15 @@ fn main() {
     patterns.push("/bfd/udp4/sessions");
     println!("Patterns: {:?}", &patterns);
     let dir = c.ls(Some(&patterns));
-    // let dir = c.ls(None);
     for name in dir.names() {
-        //     println!("{}", name);
+       // println!("{}", name);
     }
 
     println!("running dump");
     let data = dir.dump();
 
     for item in data.iter() {
+        use vpp_stat_client::StatValue::*;
         match item.value {
             ScalarIndex(val) => {
                 println!("{}: {}", item.name, val);
@@ -47,6 +46,5 @@ fn main() {
             }
             _ => unimplemented!(),
         }
-        // println!("{:?}", item);
     }
 }
