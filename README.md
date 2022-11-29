@@ -28,7 +28,7 @@ export LD_LIBRARY_PATH=${VPP_LIB_DIR}
 This example will show the naive usage of stats in order to print the data:
 
 ```
-cargo run --example dump-all
+cargo run --example vpp-get-stats -- -o dump
 ```
 
 But before that, you will need to start up the VPP with the following config for the stat segment:

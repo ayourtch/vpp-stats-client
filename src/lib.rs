@@ -389,6 +389,7 @@ impl<'a> Iterator for VppStatDirNamesIterator<'a> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum VppStatDumpError {
     ObsoleteDirData,
 }
