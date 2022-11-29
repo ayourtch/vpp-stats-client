@@ -456,6 +456,10 @@ impl VppStatClient {
         }
     }
 
+    pub fn heartbeat(&self) -> f64 {
+        unsafe { stat_segment_heartbeat_r(self.stat_client_ptr) }
+    }
+
     pub fn ls(&self, patterns: Option<&VppStringVec>) -> VppStatDir {
         let patterns = if let Some(v) = patterns {
             v.vvec_ptr

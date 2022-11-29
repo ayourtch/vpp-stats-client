@@ -114,16 +114,30 @@ fn main() {
             let data = dir.dump().unwrap();
             print_stat_data(&data);
         }
-        Operation::OpPoll => loop {
-            let data = if let Ok(d) = dir.dump() {
-                d
-            } else {
-                dir = c.ls(Some(&patterns));
-                continue;
-            };
-            print_stat_data(&data);
-            std::thread::sleep(std::time::Duration::from_secs(5));
-        },
+        Operation::OpPoll => {
+            let mut prev_heartbeat = c.heartbeat();
+            let mut lost_heartbeat = 0;
+            loop {
+                let heartbeat = c.heartbeat();
+                if heartbeat > prev_heartbeat {
+                    prev_heartbeat = heartbeat;
+                    lost_heartbeat = 0;
+                } else {
+                    lost_heartbeat += 1;
+                }
+                if lost_heartbeat > 10 {
+                    panic!("lost connection to VPP!");
+                }
+                let data = if let Ok(d) = dir.dump() {
+                    d
+                } else {
+                    dir = c.ls(Some(&patterns));
+                    continue;
+                };
+                print_stat_data(&data);
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+        }
         Operation::OpTightPoll => loop {
             let data = if let Ok(d) = dir.dump() {
                 d
