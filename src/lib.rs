@@ -419,7 +419,6 @@ impl<'a, 'b: 'a> VppStatDir<'a> {
     }
 }
 
-
 impl VppStatClient {
     /* This will likely change - it is not a good ergonomics to require to call this */
     pub fn init_once(memsize: Option<usize>) {
