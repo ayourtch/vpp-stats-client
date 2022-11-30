@@ -192,6 +192,7 @@ impl<'a> StatSegmentData<'a> {
     }
 }
 
+/*
 use std::arch::asm;
 
 /* https://lukas-prokop.at/articles/2021-11-10-rdtsc-with-rust-asm */
@@ -226,6 +227,7 @@ where
     let post = rdtscp(); // unsafe { core::arch::x86_64::_rdtsc() };
     post - pre
 }
+*/
 
 pub struct VppStatClient {
     stat_client_ptr: *mut sys::stat_client_main_t,
