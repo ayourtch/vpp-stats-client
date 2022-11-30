@@ -35,7 +35,7 @@ struct Opts {
     socket: String,
 
     /// Operation to run: ls, dump, poll, tightpoll
-    #[clap(short, long)]
+    #[clap()]
     operation: Operation,
 
     /// Pattern to match
