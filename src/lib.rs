@@ -419,6 +419,7 @@ impl<'a, 'b: 'a> VppStatDir<'a> {
     }
 }
 
+
 impl VppStatClient {
     /* This will likely change - it is not a good ergonomics to require to call this */
     pub fn init_once(memsize: Option<usize>) {
@@ -443,7 +444,7 @@ impl VppStatClient {
 
         let sc = unsafe { stat_client_get() };
         let cpath = format!("{}\0", path);
-        let cstrpath = cpath.as_str() as *const str as *const [i8] as *const i8;
+        let cstrpath = cpath.as_str() as *const str as *const [i8] as *const ::std::os::raw::c_char;
         let rv = unsafe { stat_segment_connect_r(cstrpath, sc) };
         match rv {
             0 => Ok(VppStatClient {
