@@ -46,7 +46,7 @@ use std::ffi::CStr;
 use std::ops::Index;
 use std::str;
 
-fn ptr2str(cstrptr: *const i8) -> &'static str {
+fn ptr2str(cstrptr: *const c_char) -> &'static str {
     let c_str: &CStr = unsafe { CStr::from_ptr(cstrptr) };
     let str_slice: &str = c_str.to_str().unwrap();
     str_slice
@@ -115,7 +115,7 @@ impl<'a> Index<usize> for NameVec<'a> {
     fn index(&self, index: usize) -> &Self::Output {
         unsafe {
             let vv = self.vector_ptr[index];
-            let c_str: &CStr = unsafe { CStr::from_ptr(vv as *const i8) };
+            let c_str: &CStr = unsafe { CStr::from_ptr(vv as *const c_char) };
             let slice: &str = c_str.to_str().unwrap();
             slice
         }
@@ -254,7 +254,7 @@ impl VppStringVec {
 
     pub fn push(&mut self, s: &str) {
         let cs = format!("{}\0", s);
-        let cstr_ptr = cs.as_str() as *const str as *const [i8] as *const i8;
+        let cstr_ptr = cs.as_str() as *const str as *const [i8] as *const c_char;
         self.vvec_ptr = unsafe { stat_segment_string_vector(self.vvec_ptr, cstr_ptr) };
     }
 
@@ -273,7 +273,7 @@ impl Index<usize> for VppStringVec {
             let slice: &[*mut u8] = core::slice::from_raw_parts(self.vvec_ptr, vv_len);
 
             let vv = slice[index];
-            let c_str: &CStr = unsafe { CStr::from_ptr(vv as *const i8) };
+            let c_str: &CStr = unsafe { CStr::from_ptr(vv as *const c_char) };
             let slice: &str = c_str.to_str().unwrap();
             slice
         }
@@ -444,7 +444,7 @@ impl VppStatClient {
 
         let sc = unsafe { stat_client_get() };
         let cpath = format!("{}\0", path);
-        let cstrpath = cpath.as_str() as *const str as *const [i8] as *const ::std::os::raw::c_char;
+        let cstrpath = cpath.as_str() as *const str as *const [i8] as *const c_char;
         let rv = unsafe { stat_segment_connect_r(cstrpath, sc) };
         match rv {
             0 => Ok(VppStatClient {
