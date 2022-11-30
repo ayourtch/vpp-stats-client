@@ -1,8 +1,6 @@
 use clap::Parser as ClapParser;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::str::FromStr;
-use std::time::{Duration, SystemTime};
 use vpp_stat_client::*;
 
 #[derive(Clone, Debug, Serialize, Deserialize, ClapParser)]
@@ -32,7 +30,7 @@ impl FromStr for Operation {
 #[derive(Debug, Clone, ClapParser, Serialize, Deserialize)]
 #[clap(version = "0.0", author = "Andrew Yourtchenko <ayourtch@gmail.com>")]
 struct Opts {
-    /// Target hostname to do things on
+    /// VPP stats socket as supplied in the "statseg { socket-name /path/to/socket }" config
     #[clap(short, long, default_value = "/tmp/stats.sock")]
     socket: String,
 
@@ -76,10 +74,6 @@ fn print_stat_data(data: &VppStatData<'_>) {
                 }
             }
             Empty => {}
-
-            x => {
-                println!("ERR: {:?}", &x);
-            }
             _ => unimplemented!(),
         }
     }
@@ -139,13 +133,12 @@ fn main() {
             }
         }
         Operation::OpTightPoll => loop {
-            let data = if let Ok(d) = dir.dump() {
+            let _data = if let Ok(d) = dir.dump() {
                 d
             } else {
                 dir = c.ls(Some(&patterns));
                 continue;
             };
         },
-        _ => unimplemented!(),
     }
 }
