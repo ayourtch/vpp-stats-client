@@ -59,16 +59,17 @@ fn write_stat_data(data: &VppStatData<'_>) -> String {
                 }
             }
             CounterVectorCombined(cvc) => {
-                writeln!(out, "# TYPE {}_packets counter", name);
-                writeln!(out, "# TYPE {}_bytes counter", name);
                 for k in 0..cvc.len() {
                     let cvc_k = &cvc[k];
                     for j in 0..cvc_k.len() {
+                        writeln!(out, "# TYPE {}_packets counter", name);
                         writeln!(
                             out,
                             "{}_packets{{thread=\"{}\",interface=\"{}\"}} {}",
                             name, k, j, cvc_k[j].packets
                         );
+
+                        writeln!(out, "# TYPE {}_bytes counter", name);
                         writeln!(
                             out,
                             "{}_bytes{{thread=\"{}\",interface=\"{}\"}} {}",
