@@ -7,6 +7,8 @@
 #[macro_use]
 pub mod macros; /* Handy macros */
 
+
+
 // use std;
 use std::fmt;
 use std::fmt::{Debug, Error, Formatter};
@@ -39,8 +41,6 @@ macro_rules! ucstr_mut {
     };
 }
 
-use crate::sys::*;
-
 use libc::c_char;
 use std::ffi::CStr;
 use std::ops::Index;
@@ -54,11 +54,12 @@ fn ptr2str(cstrptr: *const c_char) -> &'static str {
 
 fn vv2slice<T>(vv: *const T) -> &'static [T] {
     unsafe {
-        let vv_len = stat_segment_vec_len(vv as *mut libc::c_void) as usize;
+        let vv_len = sys::stat_segment_vec_len(vv as *mut libc::c_void) as usize;
         let slice: &[T] = core::slice::from_raw_parts(vv, vv_len);
         slice
     }
 }
+// use crate::sys::*;
 
 struct CounterCombined {
     packets: u64,
@@ -87,7 +88,7 @@ impl<'a, T> Index<usize> for DataVecVec<'a, T> {
     fn index(&self, index: usize) -> &Self::Output {
         unsafe {
             let vv = self.vector_ptr[index];
-            let vv_len = stat_segment_vec_len(vv as *mut libc::c_void) as usize;
+            let vv_len = sys::stat_segment_vec_len(vv as *mut libc::c_void) as usize;
             let slice: &[T] = core::slice::from_raw_parts(vv, vv_len);
             slice
         }
@@ -136,14 +137,14 @@ pub enum StatValue<'a> {
     Illegal,
     ScalarIndex(f64),
     CounterVectorSimple(DataVecVec<'a, u64>),
-    CounterVectorCombined(DataVecVec<'a, vlib_counter_t>),
+    CounterVectorCombined(DataVecVec<'a, sys::vlib_counter_t>),
     NameVector(NameVec<'a>),
     Empty,
     Symlink,
 }
 
 pub struct StatSegmentData<'a> {
-    orig_data: &'a stat_segment_data_t,
+    orig_data: &'a sys::stat_segment_data_t,
     pub name: &'a str,
     pub value: StatValue<'a>,
 }
@@ -154,33 +155,33 @@ impl<'a> fmt::Debug for StatSegmentData<'a> {
 }
 
 impl<'a> StatSegmentData<'a> {
-    fn from_ctype(sc: *mut stat_client_main_t, item: &'a stat_segment_data_t) -> Self {
+    fn from_ctype(sc: *mut sys::stat_client_main_t, item: &'a sys::stat_segment_data_t) -> Self {
         let c_str: &CStr = unsafe { CStr::from_ptr(item.name) };
         let name: &str = c_str.to_str().unwrap();
 
         let value = match item.type_ {
-            STAT_DIR_TYPE_ILLEGAL => StatValue::Illegal,
-            STAT_DIR_TYPE_SCALAR_INDEX => {
+            sys::STAT_DIR_TYPE_ILLEGAL => StatValue::Illegal,
+            sys::STAT_DIR_TYPE_SCALAR_INDEX => {
                 let val = unsafe { item.__bindgen_anon_1.scalar_value };
                 StatValue::ScalarIndex(val)
             }
-            STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
+            sys::STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
                 let vs = vv2slice(unsafe { item.__bindgen_anon_1.simple_counter_vec });
                 let val = DataVecVec { vector_ptr: vs };
                 StatValue::CounterVectorSimple(val)
             }
-            STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED => {
+            sys::STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED => {
                 let vc = vv2slice(unsafe { item.__bindgen_anon_1.combined_counter_vec });
                 let val = DataVecVec { vector_ptr: vc };
                 StatValue::CounterVectorCombined(val)
             }
-            STAT_DIR_TYPE_NAME_VECTOR => {
+            sys::STAT_DIR_TYPE_NAME_VECTOR => {
                 let nv = vv2slice(unsafe { item.__bindgen_anon_1.name_vector });
                 let val = NameVec { vector_ptr: nv };
                 StatValue::NameVector(val)
             }
-            STAT_DIR_TYPE_EMPTY => StatValue::Empty,
-            STAT_DIR_TYPE_SYMLINK => StatValue::Symlink,
+            sys::STAT_DIR_TYPE_EMPTY => StatValue::Empty,
+            sys::STAT_DIR_TYPE_SYMLINK => StatValue::Symlink,
             7_u32..=u32::MAX => unimplemented!(),
         };
 
@@ -255,11 +256,11 @@ impl VppStringVec {
     pub fn push(&mut self, s: &str) {
         let cs = format!("{}\0", s);
         let cstr_ptr = cs.as_str() as *const str as *const [i8] as *const c_char;
-        self.vvec_ptr = unsafe { stat_segment_string_vector(self.vvec_ptr, cstr_ptr) };
+        self.vvec_ptr = unsafe { sys::stat_segment_string_vector(self.vvec_ptr, cstr_ptr) };
     }
 
     pub fn len(&self) -> usize {
-        let vv_len = unsafe { stat_segment_vec_len(self.vvec_ptr as *mut libc::c_void) as usize };
+        let vv_len = unsafe { sys::stat_segment_vec_len(self.vvec_ptr as *mut libc::c_void) as usize };
         vv_len
     }
 }
@@ -269,7 +270,7 @@ impl Index<usize> for VppStringVec {
 
     fn index(&self, index: usize) -> &Self::Output {
         unsafe {
-            let vv_len = stat_segment_vec_len(self.vvec_ptr as *mut libc::c_void) as usize;
+            let vv_len = sys::stat_segment_vec_len(self.vvec_ptr as *mut libc::c_void) as usize;
             let slice: &[*mut u8] = core::slice::from_raw_parts(self.vvec_ptr, vv_len);
 
             let vv = slice[index];
@@ -292,13 +293,13 @@ impl fmt::Debug for VppStringVec {
 impl Drop for VppStringVec {
     fn drop(&mut self) {
         unsafe {
-            let vv_len = stat_segment_vec_len(self.vvec_ptr as *mut libc::c_void) as usize;
+            let vv_len = sys::stat_segment_vec_len(self.vvec_ptr as *mut libc::c_void) as usize;
             let slice: &[*mut u8] = core::slice::from_raw_parts(self.vvec_ptr, vv_len);
             for i in 0..slice.len() {
                 let vv = slice[i];
-                stat_segment_vec_free(vv as *mut libc::c_void);
+                sys::stat_segment_vec_free(vv as *mut libc::c_void);
             }
-            stat_segment_vec_free(self.vvec_ptr as *mut libc::c_void);
+            sys::stat_segment_vec_free(self.vvec_ptr as *mut libc::c_void);
         };
     }
 }
@@ -312,7 +313,7 @@ pub struct VppStatDir<'a> {
 impl Drop for VppStatDir<'_> {
     fn drop(&mut self) {
         unsafe {
-            stat_segment_vec_free(self.dir_ptr as *mut libc::c_void);
+            sys::stat_segment_vec_free(self.dir_ptr as *mut libc::c_void);
         };
     }
 }
@@ -362,7 +363,7 @@ impl<'a> VppStatData<'a> {
 
 impl Drop for VppStatData<'_> {
     fn drop(&mut self) {
-        unsafe { stat_segment_data_free(self.data_ptr as *mut sys::stat_segment_data_t) };
+        unsafe { sys::stat_segment_data_free(self.data_ptr as *mut sys::stat_segment_data_t) };
     }
 }
 
@@ -378,7 +379,7 @@ impl<'a> Iterator for VppStatDirNamesIterator<'a> {
             let curr = self.curr;
             self.curr = curr + 1;
             let name = unsafe {
-                stat_segment_index_to_name_r(self.dir.dir[curr], self.dir.client.stat_client_ptr)
+                sys::stat_segment_index_to_name_r(self.dir.dir[curr], self.dir.client.stat_client_ptr)
             };
             let out = ptr2str(name).to_string();
             unsafe {
@@ -400,11 +401,11 @@ impl<'a, 'b: 'a> VppStatDir<'a> {
     pub fn dump(&'a self) -> Result<VppStatData<'b>, VppStatDumpError> {
         use crate::VppStatDumpError::ObsoleteDirData;
         let res =
-            unsafe { stat_segment_dump_r(self.dir_ptr as *mut u32, self.client.stat_client_ptr) };
+            unsafe { sys::stat_segment_dump_r(self.dir_ptr as *mut u32, self.client.stat_client_ptr) };
         if res == std::ptr::null_mut() {
             return Err(ObsoleteDirData);
         }
-        let res_len = unsafe { stat_segment_vec_len(res as *mut libc::c_void) as usize };
+        let res_len = unsafe { sys::stat_segment_vec_len(res as *mut libc::c_void) as usize };
         let slice: &'b [sys::stat_segment_data_t] =
             unsafe { core::slice::from_raw_parts(res, res_len) };
         Ok(VppStatData {
@@ -428,7 +429,7 @@ impl VppStatClient {
             64000000
         };
         unsafe {
-            clib_mem_init(std::ptr::null_mut(), 64000000);
+            sys::clib_mem_init(std::ptr::null_mut(), 64000000);
         }
     }
     pub fn connect(path: &str) -> Result<Self, VppStatError> {
@@ -459,7 +460,7 @@ impl VppStatClient {
     }
 
     pub fn heartbeat(&self) -> f64 {
-        unsafe { stat_segment_heartbeat_r(self.stat_client_ptr) }
+        unsafe { sys::stat_segment_heartbeat_r(self.stat_client_ptr) }
     }
 
     pub fn ls(&self, patterns: Option<&VppStringVec>) -> VppStatDir {
@@ -468,7 +469,7 @@ impl VppStatClient {
         } else {
             std::ptr::null_mut()
         };
-        let dir_ptr = unsafe { stat_segment_ls_r(patterns, self.stat_client_ptr) };
+        let dir_ptr = unsafe { sys::stat_segment_ls_r(patterns, self.stat_client_ptr) };
         let dir = vv2slice(dir_ptr);
         VppStatDir {
             client: &self,
@@ -481,8 +482,8 @@ impl VppStatClient {
 impl Drop for VppStatClient {
     fn drop(&mut self) {
         unsafe {
-            stat_segment_disconnect_r(self.stat_client_ptr);
-            stat_client_free(self.stat_client_ptr);
+            sys::stat_segment_disconnect_r(self.stat_client_ptr);
+            sys::stat_client_free(self.stat_client_ptr);
         }
     }
 }

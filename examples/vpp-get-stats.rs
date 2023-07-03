@@ -74,7 +74,10 @@ fn print_stat_data(data: &VppStatData<'_>) {
                 }
             }
             Empty => {}
-            _ => unimplemented!(),
+            Illegal => {
+                println!("illegal");
+            }
+            x => panic!("{:?} unimplemented", &x),
         }
     }
 }
