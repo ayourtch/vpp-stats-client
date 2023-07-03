@@ -229,34 +229,71 @@ where
 }
 */
 
+const VLIB_STATS_MAX_NAME_SZ: usize = 128;
+
+pub const STAT_DIR_TYPE_ILLEGAL: stat_directory_type_t = 0;
+pub const STAT_DIR_TYPE_SCALAR_INDEX: stat_directory_type_t = 1;
+pub const STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE: stat_directory_type_t = 2;
+pub const STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED: stat_directory_type_t = 3;
+pub const STAT_DIR_TYPE_NAME_VECTOR: stat_directory_type_t = 4;
+pub const STAT_DIR_TYPE_EMPTY: stat_directory_type_t = 5;
+pub const STAT_DIR_TYPE_SYMLINK: stat_directory_type_t = 6;
+pub type stat_directory_type_t = ::std::os::raw::c_uint;
+
 #[repr(C)]
-struct VppStatsSharedHeader {
-    version: u64,
-    base: *const u8,
-    epoch: u64,                   /* volatile */
-    in_progress: u64,             /* volatile */
-    directory_vector: *const u64, /* volatile */
+#[derive(Copy, Clone)]
+pub struct vlib_stats_entry_t {}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub union vlib_stats_entry_t__bindgen_ty_1 {
+    pub __bindgen_anon_1: vlib_stats_entry_t__bindgen_ty_1__bindgen_ty_1,
+    pub index: u64,
+    pub value: u64,
+    pub data: *mut ::std::os::raw::c_void,
+    pub string_vector: *mut *mut u8,
+}
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct vlib_stats_entry_t__bindgen_ty_1__bindgen_ty_1 {
+    pub index1: u32,
+    pub index2: u32,
 }
 
 #[repr(C)]
-struct VppStatsEntry {}
+struct VlibStatsEntry {
+    pub type_: stat_directory_type_t,
+    pub __bindgen_anon_1: vlib_stats_entry_t__bindgen_ty_1,
+    pub name: [::std::os::raw::c_char; VLIB_STATS_MAX_NAME_SZ],
+}
+
+#[repr(C)]
+struct VlibStatsSharedHeader {
+    version: u64,
+    base: *const u8,
+    epoch: u64,                              /* volatile */
+    in_progress: u64,                        /* volatile */
+    directory_vector: *const VlibStatsEntry, /* volatile */
+}
 
 #[repr(C)]
 struct StatClientMain {
     current_epoch: u64,
-    shared_header: *const VppStatsSharedHeader,
-    directory_vector: *const VppStatsEntry,
+    shared_header: *const VlibStatsSharedHeader,
+    directory_vector: *const VlibStatsEntry,
     memory_size: u64,
     timeout: u64,
 }
 
 const TestChecker1: [u8; std::mem::size_of::<StatClientMain>()] =
     [0; std::mem::size_of::<sys::stat_client_main_t>()];
-const TestChecker2: [u8; std::mem::size_of::<VppStatsSharedHeader>()] =
+const TestChecker2: [u8; std::mem::size_of::<VlibStatsSharedHeader>()] =
     [0; std::mem::size_of::<sys::vlib_stats_shared_header_t>()];
+const TestChecker3: [u8; std::mem::size_of::<VlibStatsEntry>()] =
+    [0; std::mem::size_of::<sys::vlib_stats_entry_t>()];
 
 pub struct VppStatClient {
     stat_client_ptr: *mut sys::stat_client_main_t,
+    main: Option<StatClientMain>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -518,6 +555,7 @@ impl VppStatClient {
         let rv = unsafe { stat_segment_connect_r(cstrpath, sc) };
         match rv {
             0 => Ok(VppStatClient {
+                main: None,
                 stat_client_ptr: sc,
             }),
             -1 => Err(CouldNotOpenSocket),
