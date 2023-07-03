@@ -260,14 +260,14 @@ pub struct vlib_stats_entry_t__bindgen_ty_1__bindgen_ty_1 {
 }
 
 #[repr(C)]
-struct VlibStatsEntry {
+pub struct VlibStatsEntry {
     pub type_: stat_directory_type_t,
     pub __bindgen_anon_1: vlib_stats_entry_t__bindgen_ty_1,
     pub name: [::std::os::raw::c_char; VLIB_STATS_MAX_NAME_SZ],
 }
 
 #[repr(C)]
-struct VlibStatsSharedHeader {
+pub struct VlibStatsSharedHeader {
     version: u64,
     base: *const u8,
     epoch: u64,                              /* volatile */
@@ -276,12 +276,18 @@ struct VlibStatsSharedHeader {
 }
 
 #[repr(C)]
-struct StatClientMain {
+pub struct StatClientMain {
     current_epoch: u64,
     shared_header: *const VlibStatsSharedHeader,
     directory_vector: *const VlibStatsEntry,
-    memory_size: u64,
+    memory_size: usize,
     timeout: u64,
+}
+
+use std::time::{Duration, Instant};
+
+pub struct StatSegmentAccess {
+    epoch: u64,
 }
 
 const TestChecker1: [u8; std::mem::size_of::<StatClientMain>()] =
@@ -293,7 +299,12 @@ const TestChecker3: [u8; std::mem::size_of::<VlibStatsEntry>()] =
 
 pub struct VppStatClient {
     stat_client_ptr: *mut sys::stat_client_main_t,
-    main: Option<StatClientMain>,
+    main: StatClientMain,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum VppStatSegmentAccessError {
+    StatSegmentChanged,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -371,13 +382,16 @@ pub struct VppStatDir<'a> {
     client: &'a VppStatClient,
     dir_ptr: *const u32,
     dir: &'a [u32],
+    is_legacy: bool,
 }
 
 impl Drop for VppStatDir<'_> {
     fn drop(&mut self) {
-        unsafe {
-            sys::stat_segment_vec_free(self.dir_ptr as *mut libc::c_void);
-        };
+        if self.is_legacy {
+            unsafe {
+                sys::stat_segment_vec_free(self.dir_ptr as *mut libc::c_void);
+            };
+        }
     }
 }
 
@@ -500,6 +514,72 @@ impl VppStatClient {
         }
     }
 
+    pub fn stat_segment_adjust_x<T>(
+        shared_header: *const VlibStatsSharedHeader,
+        ptr: *const T,
+    ) -> Option<*const T> {
+        unsafe {
+            Some(
+                ptr.offset(
+                    (shared_header as *const u8)
+                        .offset_from(std::ptr::read_volatile(shared_header).base),
+                ),
+            )
+        }
+    }
+
+    pub fn stat_segment_adjust<T>(&self, ptr: *const T) -> Option<*const T> {
+        let shared_header = self.main.shared_header;
+        /* the mapping in the original process and mapping in the current process
+         * will have different logical memory addresses. Adjust for that */
+        Self::stat_segment_adjust_x(shared_header, ptr)
+    }
+
+    pub fn get_stat_vector_r(&self) -> Option<*const VlibStatsEntry> {
+        let shared_header = self.main.shared_header;
+        unsafe { self.stat_segment_adjust(std::ptr::read_volatile(shared_header).directory_vector) }
+    }
+
+    pub fn stat_segment_access_start(&mut self) -> Option<StatSegmentAccess> {
+        let shared_header = self.main.shared_header;
+        let epoch = unsafe { std::ptr::read_volatile(shared_header).epoch };
+
+        if self.main.timeout > 0 {
+            let secs = self.main.timeout / 1000000000u64;
+            let usecs = (self.main.timeout - secs) as u32;
+            let deadline = Instant::now()
+                .checked_add(Duration::new(secs, usecs))
+                .unwrap();
+            while unsafe { std::ptr::read_volatile(shared_header).in_progress } != 0
+                && Instant::now() < deadline
+            { /* busy loop */ }
+        } else {
+            while unsafe { std::ptr::read_volatile(shared_header).in_progress } != 0 {
+                /* busy loop */
+            }
+        }
+        unsafe {
+            self.main.directory_vector = self
+                .stat_segment_adjust(std::ptr::read_volatile(shared_header).directory_vector)
+                .unwrap();
+        }
+        Some(StatSegmentAccess { epoch })
+    }
+
+    pub fn stat_segment_access_end(
+        &mut self,
+        access: StatSegmentAccess,
+    ) -> Result<(), VppStatSegmentAccessError> {
+        let shared_header = self.main.shared_header;
+        let epoch = unsafe { std::ptr::read_volatile(shared_header).epoch };
+        let in_progress = unsafe { std::ptr::read_volatile(shared_header).in_progress };
+        if epoch != access.epoch || in_progress != 0 {
+            Err(VppStatSegmentAccessError::StatSegmentChanged)
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn connect(path: &str) -> Result<Self, VppStatError> {
         use crate::VppStatError::*;
         use std::fs::File;
@@ -529,9 +609,28 @@ impl VppStatClient {
                 let len = mmap.len();
                 let piece = &mmap[0..128];
                 println!("mmap len: {piece:x?}");
-
                 println!("Result: {x:?}, {fds:?}");
-                return Err(CouldNotOpenSocket);
+
+                let memory_size = mmap.len();
+                let shared_header_ptr = &mmap[..].as_ptr();
+                let raw_ptr: *const u8 = *shared_header_ptr;
+                let shared_header = unsafe { raw_ptr as *const VlibStatsSharedHeader };
+                let directory_vector = Self::stat_segment_adjust_x(shared_header, unsafe {
+                    std::ptr::read_volatile(shared_header).directory_vector
+                })
+                .unwrap();
+                // let shared_header = shared_header as *const u8;
+                let main = StatClientMain {
+                    current_epoch: 0,
+                    timeout: 0,
+                    memory_size,
+                    shared_header,
+                    directory_vector,
+                };
+                return Ok(VppStatClient {
+                    main,
+                    stat_client_ptr: std::ptr::null_mut(),
+                });
             }
             Err(e) => {
                 println!("Couldn't connect {path}: {e:?}");
@@ -555,7 +654,13 @@ impl VppStatClient {
         let rv = unsafe { stat_segment_connect_r(cstrpath, sc) };
         match rv {
             0 => Ok(VppStatClient {
-                main: None,
+                main: StatClientMain {
+                    current_epoch: 0,
+                    memory_size: 0,
+                    directory_vector: std::ptr::null(),
+                    shared_header: std::ptr::null(),
+                    timeout: 0,
+                },
                 stat_client_ptr: sc,
             }),
             -1 => Err(CouldNotOpenSocket),
@@ -571,7 +676,34 @@ impl VppStatClient {
         unsafe { sys::stat_segment_heartbeat_r(self.stat_client_ptr) }
     }
 
+    pub fn get_vec(&mut self, patterns: Option<&VppStringVec>) -> Vec<u32> {
+        let mut dir_vec: Vec<u32> = vec![];
+        let access = self.stat_segment_access_start().unwrap();
+        let counter_vec = self.get_stat_vector_r().unwrap();
+        let counter_slice = vv2slice(counter_vec);
+
+        for (i, v) in counter_slice.iter().enumerate() {
+            let name = &v.name;
+            println!("name: {name:?}");
+            dir_vec.push(i as u32);
+        }
+
+        self.stat_segment_access_end(access);
+        dir_vec
+    }
+
     pub fn ls(&self, patterns: Option<&VppStringVec>) -> VppStatDir {
+        let dir_vec = self.get_vec(patterns);
+
+        VppStatDir {
+            client: &self,
+            dir_ptr: std::ptr::null(),
+            dir: &vec![],
+            is_legacy: false,
+        }
+    }
+
+    pub fn ls_old(&self, patterns: Option<&VppStringVec>) -> VppStatDir {
         let patterns = if let Some(v) = patterns {
             v.vvec_ptr
         } else {
@@ -583,6 +715,7 @@ impl VppStatClient {
             client: &self,
             dir_ptr,
             dir,
+            is_legacy: true,
         } // FIXME: errors
     }
 }
