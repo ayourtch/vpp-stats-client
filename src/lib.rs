@@ -7,11 +7,10 @@
 #[macro_use]
 pub mod macros; /* Handy macros */
 
-
-
 // use std;
 use std::fmt;
 use std::fmt::{Debug, Error, Formatter};
+use uds;
 
 pub mod sys {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
@@ -230,6 +229,32 @@ where
 }
 */
 
+#[repr(C)]
+struct VppStatsSharedHeader {
+    version: u64,
+    base: *const u8,
+    epoch: u64,                   /* volatile */
+    in_progress: u64,             /* volatile */
+    directory_vector: *const u64, /* volatile */
+}
+
+#[repr(C)]
+struct VppStatsEntry {}
+
+#[repr(C)]
+struct StatClientMain {
+    current_epoch: u64,
+    shared_header: *const VppStatsSharedHeader,
+    directory_vector: *const VppStatsEntry,
+    memory_size: u64,
+    timeout: u64,
+}
+
+const TestChecker1: [u8; std::mem::size_of::<StatClientMain>()] =
+    [0; std::mem::size_of::<sys::stat_client_main_t>()];
+const TestChecker2: [u8; std::mem::size_of::<VppStatsSharedHeader>()] =
+    [0; std::mem::size_of::<sys::vlib_stats_shared_header_t>()];
+
 pub struct VppStatClient {
     stat_client_ptr: *mut sys::stat_client_main_t,
 }
@@ -437,7 +462,47 @@ impl VppStatClient {
             sys::clib_mem_init(std::ptr::null_mut(), 64000000);
         }
     }
+
     pub fn connect(path: &str) -> Result<Self, VppStatError> {
+        use crate::VppStatError::*;
+        use std::fs::File;
+        use std::os::fd::FromRawFd;
+        use std::os::fd::RawFd;
+        use uds::UnixSeqpacketConn;
+
+        use memmap::Mmap;
+
+        let socket = match UnixSeqpacketConn::connect(path) {
+            Ok(sock) => {
+                let mut bytes: [u8; 1] = [0; 1];
+                let mut fds: [RawFd; 1] = [-1; 1];
+                let x = sock.recv_fds(&mut bytes, &mut fds);
+                if x.is_err() {
+                    return Err(CouldNotOpenSocket);
+                }
+                let x = x.unwrap();
+                let nfds = x.2;
+                if nfds < 1 {
+                    return Err(ReceivingFdFailed);
+                }
+                let rawfd = fds[0];
+                let mut file = unsafe { File::from_raw_fd(rawfd) };
+                let mmap = unsafe { Mmap::map(&file).unwrap() };
+                // let mut_mmap = mmap.make_mut().unwrap();
+                let len = mmap.len();
+                let piece = &mmap[0..128];
+                println!("mmap len: {piece:x?}");
+
+                println!("Result: {x:?}, {fds:?}");
+                return Err(CouldNotOpenSocket);
+            }
+            Err(e) => {
+                println!("Couldn't connect {path}: {e:?}");
+                return Err(CouldNotConnect);
+            }
+        };
+    }
+    pub fn connect_old(path: &str) -> Result<Self, VppStatError> {
         use crate::VppStatError::*;
         use sys::*;
 
