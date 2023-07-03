@@ -260,7 +260,8 @@ impl VppStringVec {
     }
 
     pub fn len(&self) -> usize {
-        let vv_len = unsafe { sys::stat_segment_vec_len(self.vvec_ptr as *mut libc::c_void) as usize };
+        let vv_len =
+            unsafe { sys::stat_segment_vec_len(self.vvec_ptr as *mut libc::c_void) as usize };
         vv_len
     }
 }
@@ -379,7 +380,10 @@ impl<'a> Iterator for VppStatDirNamesIterator<'a> {
             let curr = self.curr;
             self.curr = curr + 1;
             let name = unsafe {
-                sys::stat_segment_index_to_name_r(self.dir.dir[curr], self.dir.client.stat_client_ptr)
+                sys::stat_segment_index_to_name_r(
+                    self.dir.dir[curr],
+                    self.dir.client.stat_client_ptr,
+                )
             };
             let out = ptr2str(name).to_string();
             unsafe {
@@ -400,8 +404,9 @@ pub enum VppStatDumpError {
 impl<'a, 'b: 'a> VppStatDir<'a> {
     pub fn dump(&'a self) -> Result<VppStatData<'b>, VppStatDumpError> {
         use crate::VppStatDumpError::ObsoleteDirData;
-        let res =
-            unsafe { sys::stat_segment_dump_r(self.dir_ptr as *mut u32, self.client.stat_client_ptr) };
+        let res = unsafe {
+            sys::stat_segment_dump_r(self.dir_ptr as *mut u32, self.client.stat_client_ptr)
+        };
         if res == std::ptr::null_mut() {
             return Err(ObsoleteDirData);
         }
