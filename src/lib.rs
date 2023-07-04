@@ -241,7 +241,7 @@ pub const STAT_DIR_TYPE_SYMLINK: stat_directory_type_t = 6;
 pub type stat_directory_type_t = ::std::os::raw::c_uint;
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct vlib_stats_entry_t {}
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -276,6 +276,7 @@ pub struct VlibStatsSharedHeader {
 }
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct StatClientMain {
     current_epoch: u64,
     shared_header: *const VlibStatsSharedHeader,
@@ -297,9 +298,15 @@ const TestChecker2: [u8; std::mem::size_of::<VlibStatsSharedHeader>()] =
 const TestChecker3: [u8; std::mem::size_of::<VlibStatsEntry>()] =
     [0; std::mem::size_of::<sys::vlib_stats_entry_t>()];
 
+#[derive(Debug)]
 pub struct VppStatClient {
     stat_client_ptr: *mut sys::stat_client_main_t,
+    #[cfg(not(feature = "c-client"))]
     main: StatClientMain,
+    #[cfg(not(feature = "c-client"))]
+    mmap: memmap::Mmap,
+    #[cfg(not(feature = "c-client"))]
+    dir_vec: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -317,31 +324,51 @@ pub enum VppStatError {
 }
 
 pub struct VppStringVec {
+    #[cfg(feature = "c-client")]
     vvec_ptr: *mut *mut u8,
+    #[cfg(not(feature = "c-client"))]
+    strings: Vec<String>,
 }
 
 impl VppStringVec {
+    #[cfg(feature = "c-client")]
     pub fn new() -> Self {
         let vvec_ptr = std::ptr::null_mut();
         VppStringVec { vvec_ptr }
     }
 
+    #[cfg(not(feature = "c-client"))]
+    pub fn new() -> Self {
+        VppStringVec { strings: vec![] }
+    }
+
+    #[cfg(feature = "c-client")]
     pub fn push(&mut self, s: &str) {
         let cs = format!("{}\0", s);
         let cstr_ptr = cs.as_str() as *const str as *const [i8] as *const c_char;
         self.vvec_ptr = unsafe { sys::stat_segment_string_vector(self.vvec_ptr, cstr_ptr) };
     }
+    #[cfg(not(feature = "c-client"))]
+    pub fn push(&mut self, s: &str) {
+        self.strings.push(s.to_string());
+    }
 
+    #[cfg(feature = "c-client")]
     pub fn len(&self) -> usize {
         let vv_len =
             unsafe { sys::stat_segment_vec_len(self.vvec_ptr as *mut libc::c_void) as usize };
         vv_len
+    }
+    #[cfg(not(feature = "c-client"))]
+    pub fn len(&self) -> usize {
+        self.strings.len()
     }
 }
 
 impl Index<usize> for VppStringVec {
     type Output = str;
 
+    #[cfg(feature = "c-client")]
     fn index(&self, index: usize) -> &Self::Output {
         unsafe {
             let vv_len = sys::stat_segment_vec_len(self.vvec_ptr as *mut libc::c_void) as usize;
@@ -352,6 +379,11 @@ impl Index<usize> for VppStringVec {
             let slice: &str = c_str.to_str().unwrap();
             slice
         }
+    }
+
+    #[cfg(not(feature = "c-client"))]
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.strings[index]
     }
 }
 
@@ -364,6 +396,7 @@ impl fmt::Debug for VppStringVec {
     }
 }
 
+#[cfg(feature = "c-client")]
 impl Drop for VppStringVec {
     fn drop(&mut self) {
         unsafe {
@@ -520,14 +553,14 @@ impl VppStatClient {
     ) -> Option<*const T> {
         unsafe {
             Some(
-                ptr.offset(
-                    (shared_header as *const u8)
-                        .offset_from(std::ptr::read_volatile(shared_header).base),
-                ),
+                (shared_header as *const u8).offset(
+                    (ptr as *const u8).offset_from(std::ptr::read_volatile(shared_header).base),
+                ) as *const T,
             )
         }
     }
 
+    #[cfg(not(feature = "c-client"))]
     pub fn stat_segment_adjust<T>(&self, ptr: *const T) -> Option<*const T> {
         let shared_header = self.main.shared_header;
         /* the mapping in the original process and mapping in the current process
@@ -535,12 +568,14 @@ impl VppStatClient {
         Self::stat_segment_adjust_x(shared_header, ptr)
     }
 
+    #[cfg(not(feature = "c-client"))]
     pub fn get_stat_vector_r(&self) -> Option<*const VlibStatsEntry> {
         let shared_header = self.main.shared_header;
         unsafe { self.stat_segment_adjust(std::ptr::read_volatile(shared_header).directory_vector) }
     }
 
-    pub fn stat_segment_access_start(&mut self) -> Option<StatSegmentAccess> {
+    #[cfg(not(feature = "c-client"))]
+    pub fn stat_segment_access_start(&self) -> Option<StatSegmentAccess> {
         let shared_header = self.main.shared_header;
         let epoch = unsafe { std::ptr::read_volatile(shared_header).epoch };
 
@@ -559,15 +594,18 @@ impl VppStatClient {
             }
         }
         unsafe {
+            /*
             self.main.directory_vector = self
                 .stat_segment_adjust(std::ptr::read_volatile(shared_header).directory_vector)
                 .unwrap();
+                */
         }
         Some(StatSegmentAccess { epoch })
     }
 
+    #[cfg(not(feature = "c-client"))]
     pub fn stat_segment_access_end(
-        &mut self,
+        &self,
         access: StatSegmentAccess,
     ) -> Result<(), VppStatSegmentAccessError> {
         let shared_header = self.main.shared_header;
@@ -580,11 +618,15 @@ impl VppStatClient {
         }
     }
 
+    #[cfg(not(feature = "c-client"))]
     pub fn connect(path: &str) -> Result<Self, VppStatError> {
         use crate::VppStatError::*;
         use std::fs::File;
-        use std::os::fd::FromRawFd;
-        use std::os::fd::RawFd;
+        /*
+         * 'use std::os::fd::FromRawFd;
+        use std::os::fd::RawFd; */
+        use std::os::unix::io::FromRawFd;
+        use std::os::unix::prelude::RawFd;
         use uds::UnixSeqpacketConn;
 
         use memmap::Mmap;
@@ -612,8 +654,8 @@ impl VppStatClient {
                 println!("Result: {x:?}, {fds:?}");
 
                 let memory_size = mmap.len();
-                let shared_header_ptr = &mmap[..].as_ptr();
-                let raw_ptr: *const u8 = *shared_header_ptr;
+                let shared_header_ptr = mmap.as_ptr(); // &mmap[..].as_ptr();
+                let raw_ptr: *const u8 = shared_header_ptr;
                 let shared_header = unsafe { raw_ptr as *const VlibStatsSharedHeader };
                 let directory_vector = Self::stat_segment_adjust_x(shared_header, unsafe {
                     std::ptr::read_volatile(shared_header).directory_vector
@@ -629,6 +671,8 @@ impl VppStatClient {
                 };
                 return Ok(VppStatClient {
                     main,
+                    mmap,
+                    dir_vec: vec![],
                     stat_client_ptr: std::ptr::null_mut(),
                 });
             }
@@ -638,8 +682,12 @@ impl VppStatClient {
             }
         };
     }
-    pub fn connect_old(path: &str) -> Result<Self, VppStatError> {
+
+    #[cfg(feature = "c-client")]
+    pub fn connect(path: &str) -> Result<Self, VppStatError> {
         use crate::VppStatError::*;
+        use memmap::Mmap;
+        use std::fs::File;
         use sys::*;
 
         static START: std::sync::Once = std::sync::Once::new();
@@ -654,13 +702,6 @@ impl VppStatClient {
         let rv = unsafe { stat_segment_connect_r(cstrpath, sc) };
         match rv {
             0 => Ok(VppStatClient {
-                main: StatClientMain {
-                    current_epoch: 0,
-                    memory_size: 0,
-                    directory_vector: std::ptr::null(),
-                    shared_header: std::ptr::null(),
-                    timeout: 0,
-                },
                 stat_client_ptr: sc,
             }),
             -1 => Err(CouldNotOpenSocket),
@@ -676,15 +717,19 @@ impl VppStatClient {
         unsafe { sys::stat_segment_heartbeat_r(self.stat_client_ptr) }
     }
 
-    pub fn get_vec(&mut self, patterns: Option<&VppStringVec>) -> Vec<u32> {
+    #[cfg(not(feature = "c-client"))]
+    pub fn get_vec(&self, patterns: Option<&VppStringVec>) -> Vec<u32> {
         let mut dir_vec: Vec<u32> = vec![];
         let access = self.stat_segment_access_start().unwrap();
         let counter_vec = self.get_stat_vector_r().unwrap();
         let counter_slice = vv2slice(counter_vec);
 
         for (i, v) in counter_slice.iter().enumerate() {
-            let name = &v.name;
-            println!("name: {name:?}");
+            let name = ptr2str(&v.name as *const u8); // String::from_utf8(v.name.to_vec()).unwrap();
+            let value = unsafe { v.__bindgen_anon_1.value };
+            let type_ = v.type_;
+
+            println!("t: {type_} val: {value:x?} name: {name:?}");
             dir_vec.push(i as u32);
         }
 
@@ -692,18 +737,20 @@ impl VppStatClient {
         dir_vec
     }
 
+    #[cfg(not(feature = "c-client"))]
     pub fn ls(&self, patterns: Option<&VppStringVec>) -> VppStatDir {
         let dir_vec = self.get_vec(patterns);
 
         VppStatDir {
-            client: &self,
+            client: self,
             dir_ptr: std::ptr::null(),
-            dir: &vec![],
+            dir: vv2slice(std::ptr::null()),
             is_legacy: false,
         }
     }
 
-    pub fn ls_old(&self, patterns: Option<&VppStringVec>) -> VppStatDir {
+    #[cfg(feature = "c-client")]
+    pub fn ls(&self, patterns: Option<&VppStringVec>) -> VppStatDir {
         let patterns = if let Some(v) = patterns {
             v.vvec_ptr
         } else {
@@ -713,13 +760,14 @@ impl VppStatClient {
         let dir = vv2slice(dir_ptr);
         VppStatDir {
             client: &self,
-            dir_ptr,
             dir,
             is_legacy: true,
+            dir_ptr: dir_ptr,
         } // FIXME: errors
     }
 }
 
+#[cfg(feature = "c-client")]
 impl Drop for VppStatClient {
     fn drop(&mut self) {
         unsafe {
