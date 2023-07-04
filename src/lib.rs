@@ -415,16 +415,14 @@ pub struct VppStatDir<'a> {
     client: &'a VppStatClient,
     dir_ptr: *const u32,
     dir: &'a [u32],
-    is_legacy: bool,
 }
 
+#[cfg(feature = "c-client")]
 impl Drop for VppStatDir<'_> {
     fn drop(&mut self) {
-        if self.is_legacy {
-            unsafe {
-                sys::stat_segment_vec_free(self.dir_ptr as *mut libc::c_void);
-            };
-        }
+        unsafe {
+            sys::stat_segment_vec_free(self.dir_ptr as *mut libc::c_void);
+        };
     }
 }
 
@@ -745,7 +743,6 @@ impl VppStatClient {
             client: self,
             dir_ptr: std::ptr::null(),
             dir: vv2slice(std::ptr::null()),
-            is_legacy: false,
         }
     }
 
@@ -761,7 +758,6 @@ impl VppStatClient {
         VppStatDir {
             client: &self,
             dir,
-            is_legacy: true,
             dir_ptr: dir_ptr,
         } // FIXME: errors
     }
