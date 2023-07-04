@@ -18,7 +18,7 @@ If you are building VPP locally using "make build", with ~/vpp being your VPP di
 as your checkout directory, then the values will be as follows:
 
 ```
-export VPP_LIB_DIR=${HOME}/vpp/build-root/install-vpp_debug-native/vpp/lib/x86_64-linux-gnu/
+export VPP_LIB_DIR=${HOME}/vpp/build-root/install-vpp_debug-native/vpp/lib/$(uname -m)-linux-gnu/
 export VPP_INC_DIR=${HOME}/vpp/build-root/install-vpp_debug-native/vpp/include/
 export LD_LIBRARY_PATH=${VPP_LIB_DIR}
 ```
@@ -28,7 +28,13 @@ export LD_LIBRARY_PATH=${VPP_LIB_DIR}
 This example will show the naive usage of stats in order to print the data:
 
 ```
-cargo run --example vpp-get-stats -- -o dump
+cargo run --example vpp-get-stats -- dump
+```
+
+If you want to run with the legacy code that used the C library, enable the feature 'c-client':
+
+```
+cargo run -F "c-client" --example vpp-get-stats -- dump
 ```
 
 But before that, you will need to start up the VPP with the following config for the stat segment:
