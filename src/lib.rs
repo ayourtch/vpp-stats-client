@@ -757,8 +757,8 @@ impl VppStatClient {
         let dir = vv2slice(dir_ptr);
         VppStatDir {
             client: &self,
+            dir_ptr,
             dir,
-            dir_ptr: dir_ptr,
         } // FIXME: errors
     }
 }
