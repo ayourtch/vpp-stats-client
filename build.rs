@@ -18,7 +18,7 @@ fn find_vpp_include_dir() -> String {
     path
 }
 
-fn main() {
+fn build_with_libvppapiclient() {
     let vpp_include_dir = match env::var("VPP_INC_DIR") {
         Ok(val) => val,
         Err(_e) => find_vpp_include_dir(),
@@ -80,4 +80,9 @@ fn main() {
 
     // Tell cargo to tell rustc to link the VPP client library
     println!("{}", flags);
+}
+
+fn main() {
+    #[cfg(feature = "c-client")]
+    build_with_libvppapiclient()
 }

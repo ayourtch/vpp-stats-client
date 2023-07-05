@@ -11,6 +11,7 @@ c-client = []
 libc = "0.2.137"
 uds = "*"
 memmap = "*"
+regex = "*"
 
 [build-dependencies]
 bindgen = "*"

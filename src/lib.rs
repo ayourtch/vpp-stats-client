@@ -12,6 +12,39 @@ use std::fmt;
 use std::fmt::{Debug, Error, Formatter};
 use uds;
 
+mod vpp {
+    pub mod vec {
+
+        #[repr(C)]
+        #[derive(Copy, Clone, Debug)]
+        struct VppVecHeader {
+            #[doc = "Number of elements in vector (NOT its allocated length)."]
+            pub len: u32,
+            #[doc = "header size divided by VEC_MIN_ALIGN"]
+            pub hdr_size: u8,
+            #[doc = "log2_align : 7, default_heap : 1"]
+            log2_align_7_default_heap_1: u8,
+            #[doc = "number of elts vector can grow without realloc"]
+            pub grow_elts: u8,
+            #[doc = "pad to 8 bytes"]
+            pub vpad: [u8; 1usize],
+        }
+
+        unsafe fn vec_find(v: *const libc::c_void) -> *const VppVecHeader {
+            (v as *const VppVecHeader).offset(-1)
+        }
+
+        pub unsafe fn vec_len(v: *const libc::c_void) -> usize {
+            (*vec_find(v)).len as usize
+        }
+
+        pub unsafe fn vec_elt_at_index<T>(vec: *const T, index: usize) -> *const T {
+            vec.offset(index.try_into().unwrap())
+        }
+    }
+}
+
+#[cfg(feature = "c-client")]
 pub mod sys {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
@@ -53,7 +86,10 @@ fn ptr2str(cstrptr: *const c_char) -> &'static str {
 
 fn vv2slice<T>(vv: *const T) -> &'static [T] {
     unsafe {
+        #[cfg(feature = "c-client")]
         let vv_len = sys::stat_segment_vec_len(vv as *mut libc::c_void) as usize;
+        #[cfg(not(feature = "c-client"))]
+        let vv_len = vpp::vec::vec_len(vv as *mut libc::c_void) as usize;
         let slice: &[T] = core::slice::from_raw_parts(vv, vv_len);
         slice
     }
@@ -87,7 +123,10 @@ impl<'a, T> Index<usize> for DataVecVec<'a, T> {
     fn index(&self, index: usize) -> &Self::Output {
         unsafe {
             let vv = self.vector_ptr[index];
+            #[cfg(feature = "c-client")]
             let vv_len = sys::stat_segment_vec_len(vv as *mut libc::c_void) as usize;
+            #[cfg(not(feature = "c-client"))]
+            let vv_len = vpp::vec::vec_len(vv as *mut libc::c_void) as usize;
             let slice: &[T] = core::slice::from_raw_parts(vv, vv_len);
             slice
         }
@@ -229,6 +268,8 @@ where
 }
 */
 
+pub const STAT_COUNTER_HEARTBEAT: usize = 0;
+
 const VLIB_STATS_MAX_NAME_SZ: usize = 128;
 
 pub const STAT_DIR_TYPE_ILLEGAL: stat_directory_type_t = 0;
@@ -312,6 +353,11 @@ pub struct VppStatClient {
 #[derive(Debug, Clone, PartialEq)]
 pub enum VppStatSegmentAccessError {
     StatSegmentChanged,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum VppStatLsError {
+    RegexCompileError,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -413,8 +459,13 @@ impl Drop for VppStringVec {
 
 pub struct VppStatDir<'a> {
     client: &'a VppStatClient,
+    #[cfg(feature = "c-client")]
     dir_ptr: *const u32,
+    #[cfg(feature = "c-client")]
     dir: &'a [u32],
+
+    #[cfg(not(feature = "c-client"))]
+    dir_vec: Vec<u32>,
 }
 
 #[cfg(feature = "c-client")]
@@ -427,18 +478,29 @@ impl Drop for VppStatDir<'_> {
 }
 
 pub struct VppStatData<'a> {
+    #[cfg(feature = "c-client")]
     stat_client_ptr: *mut sys::stat_client_main_t,
+    #[cfg(feature = "c-client")]
     data_ptr: *const sys::stat_segment_data_t,
+    #[cfg(feature = "c-client")]
     data: &'a [sys::stat_segment_data_t],
 }
 
 pub struct VppStatDataIterator<'a> {
+    #[cfg(feature = "c-client")]
     stat_data: &'a VppStatData<'a>,
+    #[cfg(feature = "c-client")]
     curr: usize,
 }
 
 impl<'a> Iterator for VppStatDataIterator<'a> {
     type Item = StatSegmentData<'a>;
+    #[cfg(not(feature = "c-client"))]
+    fn next(&mut self) -> Option<Self::Item> {
+        panic!("fixme");
+        None
+    }
+    #[cfg(feature = "c-client")]
     fn next(&mut self) -> Option<Self::Item> {
         if self.curr < self.stat_data.len() {
             let curr = self.curr;
@@ -469,6 +531,7 @@ impl<'a> VppStatData<'a> {
     }
 }
 
+#[cfg(feature = "c-client")]
 impl Drop for VppStatData<'_> {
     fn drop(&mut self) {
         unsafe { sys::stat_segment_data_free(self.data_ptr as *mut sys::stat_segment_data_t) };
@@ -482,6 +545,14 @@ pub struct VppStatDirNamesIterator<'a> {
 
 impl<'a> Iterator for VppStatDirNamesIterator<'a> {
     type Item = String;
+
+    #[cfg(not(feature = "c-client"))]
+    fn next(&mut self) -> Option<Self::Item> {
+        panic!("fixme");
+        None
+    }
+
+    #[cfg(feature = "c-client")]
     fn next(&mut self) -> Option<Self::Item> {
         if self.curr < self.dir.dir.len() {
             let curr = self.curr;
@@ -509,6 +580,11 @@ pub enum VppStatDumpError {
 }
 
 impl<'a, 'b: 'a> VppStatDir<'a> {
+    #[cfg(not(feature = "c-client"))]
+    pub fn dump(&'a self) -> Result<VppStatData<'b>, VppStatDumpError> {
+        panic!("fixme")
+    }
+    #[cfg(feature = "c-client")]
     pub fn dump(&'a self) -> Result<VppStatData<'b>, VppStatDumpError> {
         use crate::VppStatDumpError::ObsoleteDirData;
         let res = unsafe {
@@ -711,12 +787,31 @@ impl VppStatClient {
         }
     }
 
+    #[cfg(feature = "c-client")]
     pub fn heartbeat(&self) -> f64 {
         unsafe { sys::stat_segment_heartbeat_r(self.stat_client_ptr) }
     }
+    #[cfg(not(feature = "c-client"))]
+    pub fn heartbeat(&self) -> f64 {
+        let shared_header = self.main.shared_header;
+        let epoch = unsafe { std::ptr::read_volatile(shared_header).epoch };
+        if epoch != self.main.current_epoch {
+            return 0.0;
+        }
+        let access = self.stat_segment_access_start().unwrap();
+        let ep = unsafe {
+            vpp::vec::vec_elt_at_index(self.main.directory_vector, STAT_COUNTER_HEARTBEAT)
+        };
+
+        self.stat_segment_access_end(access).unwrap();
+        unsafe { (*ep).__bindgen_anon_1.value as f64 }
+    }
 
     #[cfg(not(feature = "c-client"))]
-    pub fn get_vec(&self, patterns: Option<&VppStringVec>) -> Vec<u32> {
+    pub fn get_vec(
+        &self,
+        patterns: Option<&VppStringVec>,
+    ) -> Result<Vec<u32>, VppStatSegmentAccessError> {
         let mut dir_vec: Vec<u32> = vec![];
         let access = self.stat_segment_access_start().unwrap();
         let counter_vec = self.get_stat_vector_r().unwrap();
@@ -732,18 +827,41 @@ impl VppStatClient {
         }
 
         self.stat_segment_access_end(access);
-        dir_vec
+        Ok(dir_vec)
     }
 
     #[cfg(not(feature = "c-client"))]
     pub fn ls(&self, patterns: Option<&VppStringVec>) -> VppStatDir {
-        let dir_vec = self.get_vec(patterns);
-
-        VppStatDir {
-            client: self,
-            dir_ptr: std::ptr::null(),
-            dir: vv2slice(std::ptr::null()),
+        if let Ok(d) = self.ls_r(patterns) {
+            d
+        } else {
+            VppStatDir {
+                client: self,
+                dir_vec: vec![],
+            }
         }
+    }
+
+    #[cfg(not(feature = "c-client"))]
+    pub fn ls_r(&self, patterns: Option<&VppStringVec>) -> Result<VppStatDir, VppStatLsError> {
+        use regex::Regex;
+        let mut regexes: Vec<Regex> = vec![];
+        if let Some(pat_vector) = patterns {
+            for pat in &pat_vector.strings {
+                match Regex::new(&pat) {
+                    Ok(re) => regexes.push(re),
+                    Err(e) => {
+                        return Err(VppStatLsError::RegexCompileError);
+                    }
+                }
+            }
+        }
+        let dir_vec = self.get_vec(patterns).unwrap();
+
+        Ok(VppStatDir {
+            client: self,
+            dir_vec,
+        })
     }
 
     #[cfg(feature = "c-client")]
