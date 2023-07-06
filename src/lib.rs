@@ -10,6 +10,7 @@ pub mod macros; /* Handy macros */
 // use std;
 use std::fmt;
 use std::fmt::{Debug, Error, Formatter};
+use std::time::{Duration, Instant};
 use uds;
 
 mod vpp {
@@ -44,9 +45,102 @@ mod vpp {
     }
 }
 
+pub const VLIB_STATS_MAX_NAME_SZ: usize = 128;
 #[cfg(feature = "c-client")]
 pub mod sys {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+}
+#[cfg(not(feature = "c-client"))]
+pub mod sys {
+    #[doc = " 64bit counters"]
+    pub type counter_t = u64;
+    #[doc = " Combined counter to hold both packets and byte differences."]
+    #[repr(C)]
+    #[derive(Debug, Default, Copy, Clone)]
+    pub struct vlib_counter_t {
+        #[doc = "< packet counter"]
+        pub packets: counter_t,
+        #[doc = "< byte counter"]
+        pub bytes: counter_t,
+    }
+    pub const STAT_COUNTER_HEARTBEAT: usize = 0;
+
+    pub const STAT_DIR_TYPE_ILLEGAL: stat_directory_type_t = 0;
+    pub const STAT_DIR_TYPE_SCALAR_INDEX: stat_directory_type_t = 1;
+    pub const STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE: stat_directory_type_t = 2;
+    pub const STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED: stat_directory_type_t = 3;
+    pub const STAT_DIR_TYPE_NAME_VECTOR: stat_directory_type_t = 4;
+    pub const STAT_DIR_TYPE_EMPTY: stat_directory_type_t = 5;
+    pub const STAT_DIR_TYPE_SYMLINK: stat_directory_type_t = 6;
+    pub type stat_directory_type_t = ::std::os::raw::c_uint;
+
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug)]
+    pub struct vlib_stats_entry_t {}
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub union vlib_stats_entry_t__bindgen_ty_1 {
+        pub __bindgen_anon_1: vlib_stats_entry_t__bindgen_ty_1__bindgen_ty_1,
+        pub index: u64,
+        pub value: u64,
+        pub data: *mut ::std::os::raw::c_void,
+        pub string_vector: *mut *mut u8,
+    }
+    #[repr(C)]
+    #[derive(Debug, Default, Copy, Clone)]
+    pub struct vlib_stats_entry_t__bindgen_ty_1__bindgen_ty_1 {
+        pub index1: u32,
+        pub index2: u32,
+    }
+    use std::time::{Duration, Instant};
+
+    pub struct StatSegmentAccess {
+        /* shared header from the client */
+        shared_header: *const crate::VlibStatsSharedHeader,
+        epoch: u64,
+    }
+
+    impl StatSegmentAccess {
+        pub fn start(
+            shared_header: *const crate::VlibStatsSharedHeader,
+            maybe_timeout: Option<Duration>,
+        ) -> Option<Self> {
+            let epoch = unsafe { std::ptr::read_volatile(shared_header).epoch };
+            if let Some(timeout) = maybe_timeout {
+                let deadline = Instant::now().checked_add(timeout).unwrap();
+                while unsafe { std::ptr::read_volatile(shared_header).in_progress } != 0
+                    && Instant::now() < deadline
+                { /* busy loop */ }
+            } else {
+                while unsafe { std::ptr::read_volatile(shared_header).in_progress } != 0 {
+                    /* busy loop */
+                }
+            }
+            unsafe {
+                /*
+                self.main.directory_vector = self
+                    .stat_segment_adjust(std::ptr::read_volatile(shared_header).directory_vector)
+                    .unwrap();
+                    */
+            }
+            Some(Self {
+                shared_header,
+                epoch,
+            })
+        }
+        pub fn data_changed(&self) -> bool {
+            let epoch = unsafe { std::ptr::read_volatile(self.shared_header).epoch };
+            let in_progress = unsafe { std::ptr::read_volatile(self.shared_header).in_progress };
+            self.epoch != epoch || in_progress != 0
+        }
+        pub fn end(self) -> Result<(), crate::VppStatSegmentAccessError> {
+            if self.data_changed() {
+                Err(crate::VppStatSegmentAccessError::StatSegmentChanged)
+            } else {
+                Ok(())
+            }
+        }
+    }
 }
 
 macro_rules! cstr {
@@ -182,6 +276,7 @@ pub enum StatValue<'a> {
 }
 
 pub struct StatSegmentData<'a> {
+    #[cfg(feature = "c-client")]
     orig_data: &'a sys::stat_segment_data_t,
     pub name: &'a str,
     pub value: StatValue<'a>,
@@ -193,7 +288,8 @@ impl<'a> fmt::Debug for StatSegmentData<'a> {
 }
 
 impl<'a> StatSegmentData<'a> {
-    fn from_ctype(sc: *mut sys::stat_client_main_t, item: &'a sys::stat_segment_data_t) -> Self {
+    #[cfg(feature = "c-client")]
+    fn from_ctype(item: &'a sys::stat_segment_data_t) -> Self {
         let c_str: &CStr = unsafe { CStr::from_ptr(item.name) };
         let name: &str = c_str.to_str().unwrap();
 
@@ -268,42 +364,10 @@ where
 }
 */
 
-pub const STAT_COUNTER_HEARTBEAT: usize = 0;
-
-const VLIB_STATS_MAX_NAME_SZ: usize = 128;
-
-pub const STAT_DIR_TYPE_ILLEGAL: stat_directory_type_t = 0;
-pub const STAT_DIR_TYPE_SCALAR_INDEX: stat_directory_type_t = 1;
-pub const STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE: stat_directory_type_t = 2;
-pub const STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED: stat_directory_type_t = 3;
-pub const STAT_DIR_TYPE_NAME_VECTOR: stat_directory_type_t = 4;
-pub const STAT_DIR_TYPE_EMPTY: stat_directory_type_t = 5;
-pub const STAT_DIR_TYPE_SYMLINK: stat_directory_type_t = 6;
-pub type stat_directory_type_t = ::std::os::raw::c_uint;
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-pub struct vlib_stats_entry_t {}
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub union vlib_stats_entry_t__bindgen_ty_1 {
-    pub __bindgen_anon_1: vlib_stats_entry_t__bindgen_ty_1__bindgen_ty_1,
-    pub index: u64,
-    pub value: u64,
-    pub data: *mut ::std::os::raw::c_void,
-    pub string_vector: *mut *mut u8,
-}
-#[repr(C)]
-#[derive(Debug, Default, Copy, Clone)]
-pub struct vlib_stats_entry_t__bindgen_ty_1__bindgen_ty_1 {
-    pub index1: u32,
-    pub index2: u32,
-}
-
 #[repr(C)]
 pub struct VlibStatsEntry {
-    pub type_: stat_directory_type_t,
-    pub __bindgen_anon_1: vlib_stats_entry_t__bindgen_ty_1,
+    pub type_: sys::stat_directory_type_t,
+    pub __bindgen_anon_1: sys::vlib_stats_entry_t__bindgen_ty_1,
     pub name: [::std::os::raw::c_char; VLIB_STATS_MAX_NAME_SZ],
 }
 
@@ -323,24 +387,25 @@ pub struct StatClientMain {
     shared_header: *const VlibStatsSharedHeader,
     directory_vector: *const VlibStatsEntry,
     memory_size: usize,
-    timeout: u64,
+    timeout: Option<Duration>,
 }
 
-use std::time::{Duration, Instant};
-
-pub struct StatSegmentAccess {
-    epoch: u64,
+/* sanity checks - to ensure the structures make sense */
+#[cfg(feature = "c-client")]
+mod size_checks {
+    use crate::sys::*;
+    use crate::*;
+    const TestChecker1: [u8; std::mem::size_of::<StatClientMain>()] =
+        [0; std::mem::size_of::<sys::stat_client_main_t>()];
+    const TestChecker2: [u8; std::mem::size_of::<VlibStatsSharedHeader>()] =
+        [0; std::mem::size_of::<sys::vlib_stats_shared_header_t>()];
+    const TestChecker3: [u8; std::mem::size_of::<VlibStatsEntry>()] =
+        [0; std::mem::size_of::<sys::vlib_stats_entry_t>()];
 }
-
-const TestChecker1: [u8; std::mem::size_of::<StatClientMain>()] =
-    [0; std::mem::size_of::<sys::stat_client_main_t>()];
-const TestChecker2: [u8; std::mem::size_of::<VlibStatsSharedHeader>()] =
-    [0; std::mem::size_of::<sys::vlib_stats_shared_header_t>()];
-const TestChecker3: [u8; std::mem::size_of::<VlibStatsEntry>()] =
-    [0; std::mem::size_of::<sys::vlib_stats_entry_t>()];
 
 #[derive(Debug)]
 pub struct VppStatClient {
+    #[cfg(feature = "c-client")]
     stat_client_ptr: *mut sys::stat_client_main_t,
     #[cfg(not(feature = "c-client"))]
     main: StatClientMain,
@@ -484,10 +549,12 @@ pub struct VppStatData<'a> {
     data_ptr: *const sys::stat_segment_data_t,
     #[cfg(feature = "c-client")]
     data: &'a [sys::stat_segment_data_t],
+    #[cfg(not(feature = "c-client"))]
+    stat_data: &'a u32,
 }
 
 pub struct VppStatDataIterator<'a> {
-    #[cfg(feature = "c-client")]
+    // #[cfg(feature = "c-client")]
     stat_data: &'a VppStatData<'a>,
     #[cfg(feature = "c-client")]
     curr: usize,
@@ -506,10 +573,7 @@ impl<'a> Iterator for VppStatDataIterator<'a> {
             let curr = self.curr;
             self.curr = curr + 1;
             let cptr = self.stat_data.stat_client_ptr;
-            Some(StatSegmentData::from_ctype(
-                cptr,
-                &self.stat_data.data[curr],
-            ))
+            Some(StatSegmentData::from_ctype(&self.stat_data.data[curr]))
         } else {
             None
         }
@@ -517,17 +581,32 @@ impl<'a> Iterator for VppStatDataIterator<'a> {
 }
 
 impl<'a> VppStatData<'a> {
+    #[cfg(feature = "c-client")]
     pub fn iter(&'a self) -> VppStatDataIterator {
         VppStatDataIterator {
             stat_data: self,
             curr: 0,
         }
     }
+    #[cfg(not(feature = "c-client"))]
+    pub fn iter(&'a self) -> VppStatDataIterator {
+        VppStatDataIterator { stat_data: self }
+    }
+    #[cfg(feature = "c-client")]
     pub fn len(&self) -> usize {
         self.data.len()
     }
+    #[cfg(not(feature = "c-client"))]
+    pub fn len(&self) -> usize {
+        panic!("FIXME")
+    }
+    #[cfg(feature = "c-client")]
     pub fn is_empty(&self) -> bool {
         self.data.len() == 0
+    }
+    #[cfg(not(feature = "c-client"))]
+    pub fn is_empty(&self) -> bool {
+        panic!("FIXME")
     }
 }
 
@@ -610,6 +689,7 @@ impl<'a, 'b: 'a> VppStatDir<'a> {
 
 impl VppStatClient {
     /* This will likely change - it is not a good ergonomics to require to call this */
+    #[cfg(feature = "c-client")]
     pub fn init_once(memsize: Option<usize>) {
         let memsize = if let Some(mem) = memsize {
             mem
@@ -621,6 +701,7 @@ impl VppStatClient {
         }
     }
 
+    #[cfg(not(feature = "c-client"))]
     pub fn stat_segment_adjust_x<T>(
         shared_header: *const VlibStatsSharedHeader,
         ptr: *const T,
@@ -648,49 +729,10 @@ impl VppStatClient {
         unsafe { self.stat_segment_adjust(std::ptr::read_volatile(shared_header).directory_vector) }
     }
 
-    #[cfg(not(feature = "c-client"))]
-    pub fn stat_segment_access_start(&self) -> Option<StatSegmentAccess> {
-        let shared_header = self.main.shared_header;
-        let epoch = unsafe { std::ptr::read_volatile(shared_header).epoch };
-
-        if self.main.timeout > 0 {
-            let secs = self.main.timeout / 1000000000u64;
-            let usecs = (self.main.timeout - secs) as u32;
-            let deadline = Instant::now()
-                .checked_add(Duration::new(secs, usecs))
-                .unwrap();
-            while unsafe { std::ptr::read_volatile(shared_header).in_progress } != 0
-                && Instant::now() < deadline
-            { /* busy loop */ }
-        } else {
-            while unsafe { std::ptr::read_volatile(shared_header).in_progress } != 0 {
-                /* busy loop */
-            }
-        }
-        unsafe {
-            /*
-            self.main.directory_vector = self
-                .stat_segment_adjust(std::ptr::read_volatile(shared_header).directory_vector)
-                .unwrap();
-                */
-        }
-        Some(StatSegmentAccess { epoch })
-    }
-
-    #[cfg(not(feature = "c-client"))]
-    pub fn stat_segment_access_end(
-        &self,
-        access: StatSegmentAccess,
-    ) -> Result<(), VppStatSegmentAccessError> {
-        let shared_header = self.main.shared_header;
-        let epoch = unsafe { std::ptr::read_volatile(shared_header).epoch };
-        let in_progress = unsafe { std::ptr::read_volatile(shared_header).in_progress };
-        if epoch != access.epoch || in_progress != 0 {
-            Err(VppStatSegmentAccessError::StatSegmentChanged)
-        } else {
-            Ok(())
-        }
-    }
+    /*
+               let secs = self.main.timeout / 1000000000u64;
+               let usecs = (self.main.timeout - secs) as u32;
+    * */
 
     #[cfg(not(feature = "c-client"))]
     pub fn connect(path: &str) -> Result<Self, VppStatError> {
@@ -738,7 +780,7 @@ impl VppStatClient {
                 // let shared_header = shared_header as *const u8;
                 let main = StatClientMain {
                     current_epoch: 0,
-                    timeout: 0,
+                    timeout: None,
                     memory_size,
                     shared_header,
                     directory_vector,
@@ -747,7 +789,6 @@ impl VppStatClient {
                     main,
                     mmap,
                     dir_vec: vec![],
-                    stat_client_ptr: std::ptr::null_mut(),
                 });
             }
             Err(e) => {
@@ -798,12 +839,13 @@ impl VppStatClient {
         if epoch != self.main.current_epoch {
             return 0.0;
         }
-        let access = self.stat_segment_access_start().unwrap();
+        let access =
+            sys::StatSegmentAccess::start(self.main.shared_header, self.main.timeout).unwrap();
         let ep = unsafe {
-            vpp::vec::vec_elt_at_index(self.main.directory_vector, STAT_COUNTER_HEARTBEAT)
+            vpp::vec::vec_elt_at_index(self.main.directory_vector, sys::STAT_COUNTER_HEARTBEAT)
         };
 
-        self.stat_segment_access_end(access).unwrap();
+        access.end().unwrap();
         unsafe { (*ep).__bindgen_anon_1.value as f64 }
     }
 
@@ -813,7 +855,8 @@ impl VppStatClient {
         patterns: Option<&VppStringVec>,
     ) -> Result<Vec<u32>, VppStatSegmentAccessError> {
         let mut dir_vec: Vec<u32> = vec![];
-        let access = self.stat_segment_access_start().unwrap();
+        let access =
+            sys::StatSegmentAccess::start(self.main.shared_header, self.main.timeout).unwrap();
         let counter_vec = self.get_stat_vector_r().unwrap();
         let counter_slice = vv2slice(counter_vec);
 
@@ -826,7 +869,7 @@ impl VppStatClient {
             dir_vec.push(i as u32);
         }
 
-        self.stat_segment_access_end(access);
+        access.end().unwrap();
         Ok(dir_vec)
     }
 
