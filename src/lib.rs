@@ -395,8 +395,12 @@ pub struct StatClientMain {
 mod size_checks {
     use crate::sys::*;
     use crate::*;
-    const TestChecker1: [u8; std::mem::size_of::<StatClientMain>()] =
-        [0; std::mem::size_of::<sys::stat_client_main_t>()];
+    /*
+     * This is no longer true, now that timeout is an option instead of u64!
+     *
+     * const TestChecker1: [u8; std::mem::size_of::<StatClientMain>()] =
+     *    [0; std::mem::size_of::<sys::stat_client_main_t>()];
+     */
     const TestChecker2: [u8; std::mem::size_of::<VlibStatsSharedHeader>()] =
         [0; std::mem::size_of::<sys::vlib_stats_shared_header_t>()];
     const TestChecker3: [u8; std::mem::size_of::<VlibStatsEntry>()] =
