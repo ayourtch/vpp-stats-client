@@ -43,3 +43,8 @@ But before that, you will need to start up the VPP with the following config for
 statseg { size 32m socket-name /tmp/stats.sock }
 ```
 
+To avoid needing superuser privileges, it will be probably something like:
+```
+./build-root/install-vpp_debug-native/vpp/bin/vpp statseg { size 32m socket-name /tmp/stats.sock } unix { interactive } dpdk { no-pci } plugins { plugin_dpdk.so { disable } }
+```
+
