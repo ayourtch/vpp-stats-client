@@ -415,8 +415,6 @@ pub struct VppStatClient {
     main: StatClientMain,
     #[cfg(not(feature = "c-client"))]
     mmap: memmap::Mmap,
-    #[cfg(not(feature = "c-client"))]
-    dir_vec: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -631,8 +629,15 @@ impl<'a> Iterator for VppStatDirNamesIterator<'a> {
 
     #[cfg(not(feature = "c-client"))]
     fn next(&mut self) -> Option<Self::Item> {
-        panic!("fixme");
-        None
+        if self.curr < self.dir.dir_vec.len() {
+            let curr = self.curr;
+            self.curr = curr + 1;
+            self.dir
+                .client
+                .stat_segment_index_to_name_r(self.dir.dir_vec[curr])
+        } else {
+            None
+        }
     }
 
     #[cfg(feature = "c-client")]
@@ -789,11 +794,7 @@ impl VppStatClient {
                     shared_header,
                     directory_vector,
                 };
-                return Ok(VppStatClient {
-                    main,
-                    mmap,
-                    dir_vec: vec![],
-                });
+                return Ok(VppStatClient { main, mmap });
             }
             Err(e) => {
                 println!("Couldn't connect {path}: {e:?}");
@@ -832,6 +833,22 @@ impl VppStatClient {
         }
     }
 
+    #[cfg(not(feature = "c-client"))]
+    pub fn stat_segment_index_to_name_r(&self, index: u32) -> Option<String> {
+        let access =
+            sys::StatSegmentAccess::start(self.main.shared_header, self.main.timeout).unwrap();
+        let counter_vec = self.get_stat_vector_r().unwrap();
+        let counter_slice = vv2slice(counter_vec);
+        let v = &counter_slice[index as usize];
+        let mut out = None;
+        if v.type_ != sys::STAT_DIR_TYPE_EMPTY {
+            let name = ptr2str(&v.name as *const u8);
+            out = Some(name.to_string());
+        }
+        access.end().unwrap();
+        out
+    }
+
     #[cfg(feature = "c-client")]
     pub fn heartbeat(&self) -> f64 {
         unsafe { sys::stat_segment_heartbeat_r(self.stat_client_ptr) }
@@ -854,30 +871,6 @@ impl VppStatClient {
     }
 
     #[cfg(not(feature = "c-client"))]
-    pub fn get_vec(
-        &self,
-        patterns: Option<&VppStringVec>,
-    ) -> Result<Vec<u32>, VppStatSegmentAccessError> {
-        let mut dir_vec: Vec<u32> = vec![];
-        let access =
-            sys::StatSegmentAccess::start(self.main.shared_header, self.main.timeout).unwrap();
-        let counter_vec = self.get_stat_vector_r().unwrap();
-        let counter_slice = vv2slice(counter_vec);
-
-        for (i, v) in counter_slice.iter().enumerate() {
-            let name = ptr2str(&v.name as *const u8); // String::from_utf8(v.name.to_vec()).unwrap();
-            let value = unsafe { v.__bindgen_anon_1.value };
-            let type_ = v.type_;
-
-            println!("t: {type_} val: {value:x?} name: {name:?}");
-            dir_vec.push(i as u32);
-        }
-
-        access.end().unwrap();
-        Ok(dir_vec)
-    }
-
-    #[cfg(not(feature = "c-client"))]
     pub fn ls(&self, patterns: Option<&VppStringVec>) -> VppStatDir {
         if let Ok(d) = self.ls_r(patterns) {
             d
@@ -892,7 +885,9 @@ impl VppStatClient {
     #[cfg(not(feature = "c-client"))]
     pub fn ls_r(&self, patterns: Option<&VppStringVec>) -> Result<VppStatDir, VppStatLsError> {
         use regex::Regex;
+        let mut dir_vec: Vec<u32> = vec![];
         let mut regexes: Vec<Regex> = vec![];
+
         if let Some(pat_vector) = patterns {
             for pat in &pat_vector.strings {
                 match Regex::new(&pat) {
@@ -903,7 +898,29 @@ impl VppStatClient {
                 }
             }
         }
-        let dir_vec = self.get_vec(patterns).unwrap();
+
+        let access =
+            sys::StatSegmentAccess::start(self.main.shared_header, self.main.timeout).unwrap();
+        let counter_vec = self.get_stat_vector_r().unwrap();
+        let counter_slice = vv2slice(counter_vec);
+
+        for (i, v) in counter_slice.iter().enumerate() {
+            let name = ptr2str(&v.name as *const u8); // String::from_utf8(v.name.to_vec()).unwrap();
+            let value = unsafe { v.__bindgen_anon_1.value };
+            let type_ = v.type_;
+
+            if patterns.is_none() {
+                dir_vec.push(i as u32);
+            } else {
+                for regex in &regexes {
+                    if regex.is_match(name) {
+                        dir_vec.push(i as u32);
+                    }
+                }
+            }
+        }
+
+        access.end().unwrap();
 
         Ok(VppStatDir {
             client: self,
