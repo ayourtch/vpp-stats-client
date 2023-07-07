@@ -330,6 +330,21 @@ impl<'a> StatSegmentData<'a> {
 /*
 use std::arch::asm;
 
+#[cfg(any(target_arch = "arm64", target_arch = "aarch64"))]
+pub fn rdtscp() -> u64 {
+    let mut val: u64;
+    unsafe {
+        asm!(
+            "mrs {0}, cntvct_el0",
+            out(reg) val,
+            options(nostack)
+        );
+    }
+
+    val
+}
+
+
 /* https://lukas-prokop.at/articles/2021-11-10-rdtsc-with-rust-asm */
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn rdtscp() -> u64 {
