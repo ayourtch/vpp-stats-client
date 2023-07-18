@@ -8,6 +8,8 @@
 pub mod macros; /* Handy macros */
 
 // use std;
+use std::borrow::BorrowMut;
+use std::cell::RefCell;
 use std::fmt;
 use std::fmt::{Debug, Error, Formatter};
 use std::time::{Duration, Instant};
@@ -127,6 +129,9 @@ pub mod sys {
                 shared_header,
                 epoch,
             })
+        }
+        pub fn get_epoch(&self) -> u64 {
+            self.epoch
         }
         pub fn data_changed(&self) -> bool {
             let epoch = unsafe { std::ptr::read_volatile(self.shared_header).epoch };
@@ -398,7 +403,7 @@ pub struct VlibStatsSharedHeader {
 #[repr(C)]
 #[derive(Debug)]
 pub struct StatClientMain {
-    current_epoch: u64,
+    heartbeat_epoch: RefCell<u64>,
     shared_header: *const VlibStatsSharedHeader,
     directory_vector: *const VlibStatsEntry,
     memory_size: usize,
@@ -548,6 +553,8 @@ pub struct VppStatDir<'a> {
 
     #[cfg(not(feature = "c-client"))]
     dir_vec: Vec<u32>,
+    #[cfg(not(feature = "c-client"))]
+    current_epoch: u64,
 }
 
 #[cfg(feature = "c-client")]
@@ -797,17 +804,20 @@ impl VppStatClient {
                 let shared_header_ptr = mmap.as_ptr(); // &mmap[..].as_ptr();
                 let raw_ptr: *const u8 = shared_header_ptr;
                 let shared_header = unsafe { raw_ptr as *const VlibStatsSharedHeader };
+                let access = sys::StatSegmentAccess::start(shared_header, None).unwrap();
                 let directory_vector = Self::stat_segment_adjust_x(shared_header, unsafe {
                     std::ptr::read_volatile(shared_header).directory_vector
                 })
                 .unwrap();
+                let heartbeat_epoch = RefCell::new(access.get_epoch());
+                access.end().unwrap();
                 // let shared_header = shared_header as *const u8;
                 let main = StatClientMain {
-                    current_epoch: 0,
                     timeout: None,
                     memory_size,
                     shared_header,
                     directory_vector,
+                    heartbeat_epoch,
                 };
                 return Ok(VppStatClient { main, mmap });
             }
@@ -872,7 +882,7 @@ impl VppStatClient {
     pub fn heartbeat(&self) -> f64 {
         let shared_header = self.main.shared_header;
         let epoch = unsafe { std::ptr::read_volatile(shared_header).epoch };
-        if epoch != self.main.current_epoch {
+        if epoch != *self.main.heartbeat_epoch.borrow() {
             return 0.0;
         }
         let access =
@@ -892,6 +902,7 @@ impl VppStatClient {
         } else {
             VppStatDir {
                 client: self,
+                current_epoch: 0,
                 dir_vec: vec![],
             }
         }
@@ -934,12 +945,16 @@ impl VppStatClient {
                 }
             }
         }
+        let current_epoch = access.get_epoch();
 
-        access.end().unwrap();
+        if access.end().is_ok() {
+            *self.main.heartbeat_epoch.borrow_mut() = current_epoch;
+        }
 
         Ok(VppStatDir {
             client: self,
             dir_vec,
+            current_epoch,
         })
     }
 
