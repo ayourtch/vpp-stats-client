@@ -94,17 +94,20 @@ pub mod sys {
         pub index1: u32,
         pub index2: u32,
     }
+    use crate::VlibStatsEntry;
+    use crate::VlibStatsSharedHeader;
     use std::time::{Duration, Instant};
 
     pub struct StatSegmentAccess {
         /* shared header from the client */
         shared_header: *const crate::VlibStatsSharedHeader,
+        directory_vector: *const VlibStatsEntry,
         epoch: u64,
     }
 
     impl StatSegmentAccess {
         pub fn start(
-            shared_header: *const crate::VlibStatsSharedHeader,
+            shared_header: *const VlibStatsSharedHeader,
             maybe_timeout: Option<Duration>,
         ) -> Option<Self> {
             let epoch = unsafe { std::ptr::read_volatile(shared_header).epoch };
@@ -118,20 +121,50 @@ pub mod sys {
                     /* busy loop */
                 }
             }
-            unsafe {
-                /*
-                self.main.directory_vector = self
-                    .stat_segment_adjust(std::ptr::read_volatile(shared_header).directory_vector)
-                    .unwrap();
-                    */
-            }
+            let directory_vector = unsafe {
+                Self::stat_segment_adjust_x(shared_header, unsafe {
+                    std::ptr::read_volatile(shared_header).directory_vector
+                })
+                .unwrap()
+            };
             Some(Self {
                 shared_header,
+                directory_vector,
                 epoch,
             })
         }
+        #[cfg(not(feature = "c-client"))]
+        pub fn stat_segment_adjust_x<T>(
+            shared_header: *const VlibStatsSharedHeader,
+            ptr: *const T,
+        ) -> Option<*const T> {
+            unsafe {
+                Some((shared_header as *const u8).offset(
+                    (ptr as *const u8).offset_from(std::ptr::read_volatile(shared_header).base),
+                ) as *const T)
+            }
+        }
+
+        #[cfg(not(feature = "c-client"))]
+        pub fn stat_segment_adjust<T>(&self, ptr: *const T) -> Option<*const T> {
+            let shared_header = self.shared_header;
+            /* the mapping in the original process and mapping in the current process
+             * will have different logical memory addresses. Adjust for that */
+            Self::stat_segment_adjust_x(shared_header, ptr)
+        }
+        #[cfg(not(feature = "c-client"))]
+        pub fn get_stat_vector_r(&self) -> Option<*const VlibStatsEntry> {
+            let shared_header = self.shared_header;
+            unsafe {
+                self.stat_segment_adjust(std::ptr::read_volatile(shared_header).directory_vector)
+            }
+        }
+
         pub fn get_epoch(&self) -> u64 {
             self.epoch
+        }
+        pub fn get_directory_vector(&self) -> *const VlibStatsEntry {
+            self.directory_vector
         }
         pub fn data_changed(&self) -> bool {
             let epoch = unsafe { std::ptr::read_volatile(self.shared_header).epoch };
@@ -405,7 +438,7 @@ pub struct VlibStatsSharedHeader {
 pub struct StatClientMain {
     heartbeat_epoch: RefCell<u64>,
     shared_header: *const VlibStatsSharedHeader,
-    directory_vector: *const VlibStatsEntry,
+    directory_vector: RefCell<*const VlibStatsEntry>,
     memory_size: usize,
     timeout: Option<Duration>,
 }
@@ -732,34 +765,6 @@ impl VppStatClient {
         }
     }
 
-    #[cfg(not(feature = "c-client"))]
-    pub fn stat_segment_adjust_x<T>(
-        shared_header: *const VlibStatsSharedHeader,
-        ptr: *const T,
-    ) -> Option<*const T> {
-        unsafe {
-            Some(
-                (shared_header as *const u8).offset(
-                    (ptr as *const u8).offset_from(std::ptr::read_volatile(shared_header).base),
-                ) as *const T,
-            )
-        }
-    }
-
-    #[cfg(not(feature = "c-client"))]
-    pub fn stat_segment_adjust<T>(&self, ptr: *const T) -> Option<*const T> {
-        let shared_header = self.main.shared_header;
-        /* the mapping in the original process and mapping in the current process
-         * will have different logical memory addresses. Adjust for that */
-        Self::stat_segment_adjust_x(shared_header, ptr)
-    }
-
-    #[cfg(not(feature = "c-client"))]
-    pub fn get_stat_vector_r(&self) -> Option<*const VlibStatsEntry> {
-        let shared_header = self.main.shared_header;
-        unsafe { self.stat_segment_adjust(std::ptr::read_volatile(shared_header).directory_vector) }
-    }
-
     /*
                let secs = self.main.timeout / 1000000000u64;
                let usecs = (self.main.timeout - secs) as u32;
@@ -805,10 +810,7 @@ impl VppStatClient {
                 let raw_ptr: *const u8 = shared_header_ptr;
                 let shared_header = unsafe { raw_ptr as *const VlibStatsSharedHeader };
                 let access = sys::StatSegmentAccess::start(shared_header, None).unwrap();
-                let directory_vector = Self::stat_segment_adjust_x(shared_header, unsafe {
-                    std::ptr::read_volatile(shared_header).directory_vector
-                })
-                .unwrap();
+                let directory_vector = RefCell::new(access.get_directory_vector());
                 let heartbeat_epoch = RefCell::new(access.get_epoch());
                 access.end().unwrap();
                 // let shared_header = shared_header as *const u8;
@@ -862,7 +864,7 @@ impl VppStatClient {
     pub fn stat_segment_index_to_name_r(&self, index: u32) -> Option<String> {
         let access =
             sys::StatSegmentAccess::start(self.main.shared_header, self.main.timeout).unwrap();
-        let counter_vec = self.get_stat_vector_r().unwrap();
+        let counter_vec = access.get_stat_vector_r().unwrap();
         let counter_slice = vv2slice(counter_vec);
         let v = &counter_slice[index as usize];
         let mut out = None;
@@ -888,7 +890,10 @@ impl VppStatClient {
         let access =
             sys::StatSegmentAccess::start(self.main.shared_header, self.main.timeout).unwrap();
         let ep = unsafe {
-            vpp::vec::vec_elt_at_index(self.main.directory_vector, sys::STAT_COUNTER_HEARTBEAT)
+            vpp::vec::vec_elt_at_index(
+                *self.main.directory_vector.borrow(),
+                sys::STAT_COUNTER_HEARTBEAT,
+            )
         };
 
         access.end().unwrap();
@@ -927,7 +932,7 @@ impl VppStatClient {
 
         let access =
             sys::StatSegmentAccess::start(self.main.shared_header, self.main.timeout).unwrap();
-        let counter_vec = self.get_stat_vector_r().unwrap();
+        let counter_vec = access.get_stat_vector_r().unwrap();
         let counter_slice = vv2slice(counter_vec);
 
         for (i, v) in counter_slice.iter().enumerate() {
