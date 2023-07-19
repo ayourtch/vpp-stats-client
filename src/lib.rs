@@ -96,6 +96,8 @@ pub mod sys {
     }
     use crate::VlibStatsEntry;
     use crate::VlibStatsSharedHeader;
+    use crate::VppStatClient;
+    use std::cell::RefCell;
     use std::time::{Duration, Instant};
 
     pub struct StatSegmentAccess {
@@ -106,10 +108,9 @@ pub mod sys {
     }
 
     impl StatSegmentAccess {
-        pub fn start(
-            shared_header: *const VlibStatsSharedHeader,
-            maybe_timeout: Option<Duration>,
-        ) -> Option<Self> {
+        pub fn start(client: &VppStatClient) -> Option<Self> {
+            let shared_header = client.get_shared_header();
+            let maybe_timeout = client.get_timeout();
             let epoch = unsafe { std::ptr::read_volatile(shared_header).epoch };
             if let Some(timeout) = maybe_timeout {
                 let deadline = Instant::now().checked_add(timeout).unwrap();
@@ -127,6 +128,7 @@ pub mod sys {
                 })
                 .unwrap()
             };
+            *client.main.directory_vector.borrow_mut() = directory_vector;
             Some(Self {
                 shared_header,
                 directory_vector,
@@ -771,6 +773,16 @@ impl VppStatClient {
     * */
 
     #[cfg(not(feature = "c-client"))]
+    pub fn get_timeout(&self) -> Option<Duration> {
+        self.main.timeout
+    }
+
+    #[cfg(not(feature = "c-client"))]
+    pub fn get_shared_header(&self) -> *const VlibStatsSharedHeader {
+        self.main.shared_header
+    }
+
+    #[cfg(not(feature = "c-client"))]
     pub fn new(mmap: memmap::Mmap) -> Self {
         let memory_size = mmap.len();
         let shared_header_ptr = mmap.as_ptr();
@@ -779,7 +791,7 @@ impl VppStatClient {
         let main = StatClientMain {
             timeout: None,
             memory_size,
-            shared_header: std::ptr::null(),
+            shared_header,
             directory_vector: RefCell::new(std::ptr::null()),
             heartbeat_epoch: RefCell::new(0),
         };
@@ -822,9 +834,7 @@ impl VppStatClient {
                 println!("Result: {x:?}, {fds:?}");
 
                 let mut client = Self::new(mmap);
-                let access =
-                    sys::StatSegmentAccess::start(client.main.shared_header, None).unwrap();
-                client.main.directory_vector = RefCell::new(access.get_directory_vector());
+                let access = sys::StatSegmentAccess::start(&client).unwrap();
                 client.main.heartbeat_epoch = RefCell::new(access.get_epoch());
                 access.end().unwrap();
                 return Ok(client);
@@ -868,8 +878,7 @@ impl VppStatClient {
 
     #[cfg(not(feature = "c-client"))]
     pub fn stat_segment_index_to_name_r(&self, index: u32) -> Option<String> {
-        let access =
-            sys::StatSegmentAccess::start(self.main.shared_header, self.main.timeout).unwrap();
+        let access = sys::StatSegmentAccess::start(&self).unwrap();
         let counter_vec = access.get_stat_vector_r().unwrap();
         let counter_slice = vv2slice(counter_vec);
         let v = &counter_slice[index as usize];
@@ -893,8 +902,7 @@ impl VppStatClient {
         if epoch != *self.main.heartbeat_epoch.borrow() {
             return 0.0;
         }
-        let access =
-            sys::StatSegmentAccess::start(self.main.shared_header, self.main.timeout).unwrap();
+        let access = sys::StatSegmentAccess::start(&self).unwrap();
         let ep = unsafe {
             vpp::vec::vec_elt_at_index(
                 *self.main.directory_vector.borrow(),
@@ -936,8 +944,7 @@ impl VppStatClient {
             }
         }
 
-        let access =
-            sys::StatSegmentAccess::start(self.main.shared_header, self.main.timeout).unwrap();
+        let access = sys::StatSegmentAccess::start(&self).unwrap();
         let counter_vec = access.get_stat_vector_r().unwrap();
         let counter_slice = vv2slice(counter_vec);
 
