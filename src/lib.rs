@@ -180,8 +180,9 @@ pub mod sys {
             self.epoch != epoch || in_progress != 0
         }
         pub fn end(self) -> Result<(), crate::VppStatSegmentAccessError> {
+            use crate::VppStatSegmentAccessError;
             if self.data_changed() {
-                Err(crate::VppStatSegmentAccessError::StatSegmentChanged)
+                Err(VppStatSegmentAccessError::StatSegmentChanged)
             } else {
                 Ok(())
             }
