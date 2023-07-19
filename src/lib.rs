@@ -112,16 +112,18 @@ pub mod sys {
             let shared_header = client.get_shared_header();
             let maybe_timeout = client.get_timeout();
             let epoch = unsafe { std::ptr::read_volatile(shared_header).epoch };
-            if let Some(timeout) = maybe_timeout {
+            let success = if let Some(timeout) = maybe_timeout {
                 let deadline = Instant::now().checked_add(timeout).unwrap();
                 while unsafe { std::ptr::read_volatile(shared_header).in_progress } != 0
                     && Instant::now() < deadline
                 { /* busy loop */ }
+                Instant::now() < deadline
             } else {
                 while unsafe { std::ptr::read_volatile(shared_header).in_progress } != 0 {
                     /* busy loop */
                 }
-            }
+                true
+            };
             let directory_vector = unsafe {
                 Self::stat_segment_adjust_x(shared_header, unsafe {
                     std::ptr::read_volatile(shared_header).directory_vector
@@ -129,11 +131,15 @@ pub mod sys {
                 .unwrap()
             };
             *client.main.directory_vector.borrow_mut() = directory_vector;
-            Some(Self {
-                shared_header,
-                directory_vector,
-                epoch,
-            })
+            if success {
+                Some(Self {
+                    shared_header,
+                    directory_vector,
+                    epoch,
+                })
+            } else {
+                None
+            }
         }
         #[cfg(not(feature = "c-client"))]
         pub fn stat_segment_adjust_x<T>(
@@ -722,6 +728,7 @@ impl<'a> Iterator for VppStatDirNamesIterator<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum VppStatDumpError {
     ObsoleteDirData,
+    AccessStartFailed,
 }
 
 impl<'a, 'b: 'a> VppStatDir<'a> {
