@@ -771,6 +771,22 @@ impl VppStatClient {
     * */
 
     #[cfg(not(feature = "c-client"))]
+    pub fn new(mmap: memmap::Mmap) -> Self {
+        let memory_size = mmap.len();
+        let shared_header_ptr = mmap.as_ptr();
+        let raw_ptr: *const u8 = shared_header_ptr;
+        let shared_header = unsafe { raw_ptr as *const VlibStatsSharedHeader };
+        let main = StatClientMain {
+            timeout: None,
+            memory_size,
+            shared_header: std::ptr::null(),
+            directory_vector: RefCell::new(std::ptr::null()),
+            heartbeat_epoch: RefCell::new(0),
+        };
+        VppStatClient { main, mmap }
+    }
+
+    #[cfg(not(feature = "c-client"))]
     pub fn connect(path: &str) -> Result<Self, VppStatError> {
         use crate::VppStatError::*;
         use std::fs::File;
@@ -805,23 +821,13 @@ impl VppStatClient {
                 println!("mmap len: {piece:x?}");
                 println!("Result: {x:?}, {fds:?}");
 
-                let memory_size = mmap.len();
-                let shared_header_ptr = mmap.as_ptr(); // &mmap[..].as_ptr();
-                let raw_ptr: *const u8 = shared_header_ptr;
-                let shared_header = unsafe { raw_ptr as *const VlibStatsSharedHeader };
-                let access = sys::StatSegmentAccess::start(shared_header, None).unwrap();
-                let directory_vector = RefCell::new(access.get_directory_vector());
-                let heartbeat_epoch = RefCell::new(access.get_epoch());
+                let mut client = Self::new(mmap);
+                let access =
+                    sys::StatSegmentAccess::start(client.main.shared_header, None).unwrap();
+                client.main.directory_vector = RefCell::new(access.get_directory_vector());
+                client.main.heartbeat_epoch = RefCell::new(access.get_epoch());
                 access.end().unwrap();
-                // let shared_header = shared_header as *const u8;
-                let main = StatClientMain {
-                    timeout: None,
-                    memory_size,
-                    shared_header,
-                    directory_vector,
-                    heartbeat_epoch,
-                };
-                return Ok(VppStatClient { main, mmap });
+                return Ok(client);
             }
             Err(e) => {
                 println!("Couldn't connect {path}: {e:?}");
