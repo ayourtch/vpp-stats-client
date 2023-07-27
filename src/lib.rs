@@ -94,6 +94,25 @@ pub mod sys {
         pub index1: u32,
         pub index2: u32,
     }
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct stat_segment_data_t {
+        pub name: *mut ::std::os::raw::c_char,
+        pub type_: stat_directory_type_t,
+        pub via_symlink: bool,
+        pub __bindgen_anon_1: stat_segment_data_t__bindgen_ty_1,
+    }
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub union stat_segment_data_t__bindgen_ty_1 {
+        pub scalar_value: ::std::os::raw::c_double,
+        pub error_vector: *mut counter_t,
+        pub simple_counter_vec: *mut *mut counter_t,
+        pub combined_counter_vec: *mut *mut vlib_counter_t,
+        pub name_vector: *mut *mut u8,
+    }
+
     use crate::VlibStatsEntry;
     use crate::VlibStatsSharedHeader;
     use crate::VppStatClient;
@@ -335,6 +354,29 @@ impl<'a> fmt::Debug for StatSegmentData<'a> {
 }
 
 impl<'a> StatSegmentData<'a> {
+    #[cfg(not(feature = "c-client"))]
+    fn from_ctype(item: &'a VlibStatsEntry) -> Self {
+        let c_str: &CStr = unsafe { CStr::from_ptr(&item.name as *const u8) };
+        let name: &str = c_str.to_str().unwrap();
+        println!("Name: {}", &name);
+        let value = match item.type_ {
+            sys::STAT_DIR_TYPE_ILLEGAL => StatValue::Illegal,
+            sys::STAT_DIR_TYPE_SCALAR_INDEX => {
+                let val = unsafe { item.__bindgen_anon_1.value };
+                StatValue::ScalarIndex(val as f64)
+            }
+            sys::STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
+                let vs = vv2slice(unsafe { item.__bindgen_anon_1.simple_counter_vec });
+                let val = DataVecVec { vector_ptr: vs };
+                StatValue::CounterVectorSimple(val)
+            }
+            x => unimplemented!("Unimplemented entry type {}", x),
+        };
+        StatSegmentData {
+            name,
+            value,
+        }
+    }
     #[cfg(feature = "c-client")]
     fn from_ctype(item: &'a sys::stat_segment_data_t) -> Self {
         let c_str: &CStr = unsafe { CStr::from_ptr(item.name) };
@@ -365,6 +407,7 @@ impl<'a> StatSegmentData<'a> {
             sys::STAT_DIR_TYPE_SYMLINK => StatValue::Symlink,
             7_u32..=u32::MAX => unimplemented!(),
         };
+
 
         StatSegmentData {
             orig_data: item,
@@ -735,6 +778,27 @@ pub enum VppStatDumpError {
 impl<'a, 'b: 'a> VppStatDir<'a> {
     #[cfg(not(feature = "c-client"))]
     pub fn dump(&'a self) -> Result<VppStatData<'b>, VppStatDumpError> {
+        use crate::VppStatDumpError::*;
+        let mut out: Vec<StatSegmentData<'b>> = vec![];
+
+        let access = sys::StatSegmentAccess::start(&self.client);
+        if access.is_none() {
+            return Err(AccessStartFailed);
+        }
+        let access = access.unwrap();
+        if access.get_epoch() != self.current_epoch {
+            return Err(ObsoleteDirData);
+        }
+
+        let counter_vec = access.get_stat_vector_r().unwrap();
+        let counter_slice = vv2slice(counter_vec);
+
+        for (i, index) in self.dir_vec.iter().enumerate() {
+            let v = &counter_slice[*index as usize];
+            let newval = StatSegmentData::from_ctype(v);
+            println!("{}: {:?}", index, &newval);
+        }
+
         panic!("fixme")
     }
     #[cfg(feature = "c-client")]
