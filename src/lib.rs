@@ -370,7 +370,7 @@ impl<'a> fmt::Debug for StatSegmentData<'a> {
 impl<'a> StatSegmentData<'a> {
     #[cfg(not(feature = "c-client"))]
     fn from_ctype(access: &crate::sys::StatSegmentAccess, item: &'a VlibStatsEntry) -> Self {
-        Self::copy_data(access, item, None, false)
+        Self::copy_data(access, item, None, None, false)
     }
 
     #[cfg(not(feature = "c-client"))]
@@ -378,11 +378,16 @@ impl<'a> StatSegmentData<'a> {
         access: &crate::sys::StatSegmentAccess,
         item: &'a VlibStatsEntry,
         index2: Option<usize>,
+        maybe_name: Option<*const u8>,
         via_symlink: bool,
     ) -> Self {
-        let c_str: &CStr = unsafe { CStr::from_ptr(&item.name as *const u8) };
+        use crate::sys::vlib_counter_t;
+        let c_str: &CStr = unsafe { CStr::from_ptr(maybe_name.unwrap_or(&item.name as *const u8)) };
         let name: &str = c_str.to_str().unwrap();
-        println!("Name: {} type: {}", &name, item.type_);
+        println!(
+            "Name: {} type: {}, via_symlink: {}",
+            &name, item.type_, via_symlink
+        );
         let value = match item.type_ {
             sys::STAT_DIR_TYPE_ILLEGAL => StatValue::Illegal,
             sys::STAT_DIR_TYPE_SCALAR_INDEX => {
@@ -402,7 +407,13 @@ impl<'a> StatSegmentData<'a> {
                     "symlink with dir index {} target index {}",
                     dir_index, target_index
                 );
-                return Self::copy_data(access, entry, Some(target_index as usize), true);
+                return Self::copy_data(
+                    access,
+                    entry,
+                    Some(target_index as usize),
+                    Some(&item.name as *const u8),
+                    true,
+                );
             }
             sys::STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
                 let simple_c: *const *const u64 = unsafe {
@@ -434,6 +445,37 @@ impl<'a> StatSegmentData<'a> {
                     _phantom: PhantomData,
                 };
                 StatValue::CounterVectorSimple(val)
+            }
+            sys::STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED => {
+                let simple_c: *const *const vlib_counter_t = unsafe {
+                    access
+                        .stat_segment_adjust(item.__bindgen_anon_1.data)
+                        .unwrap() as *const *const vlib_counter_t
+                };
+                let slice_simple_c = vv2slice(simple_c);
+                let mut vvec: Vec<Vec<vlib_counter_t>> = vec![];
+
+                for (i, x) in slice_simple_c.into_iter().enumerate() {
+                    let mut counters: Vec<vlib_counter_t> = vec![];
+                    let cvec = unsafe { access.stat_segment_adjust(*x).unwrap() };
+                    let s_cvec = vv2slice(cvec);
+                    if let Some(idx2) = index2 {
+                        counters.push(s_cvec[idx2]);
+                    } else {
+                        for c in s_cvec {
+                            counters.push(*c);
+                        }
+                    }
+                    vvec.push(counters);
+                }
+                // let () = item; // VlibStatsEntry
+                // let vs = vv2slice(unsafe { item.__bindgen_anon_1.__bindgen_anon_1.simple_counter_vec });
+                // let val = DataVecVec { vector_ptr: vs };
+                let val = DataVecVec {
+                    vector: vvec,
+                    _phantom: PhantomData,
+                };
+                StatValue::CounterVectorCombined(val)
             }
             x => unimplemented!("Unimplemented entry type {}", x),
         };
