@@ -257,11 +257,13 @@ fn vv2slice<T>(vv: *const T) -> &'static [T] {
 }
 // use crate::sys::*;
 
+#[derive(Clone)]
 struct CounterCombined {
     packets: u64,
     bytes: u64,
 }
 
+#[derive(Clone)]
 pub struct DataVecVec<'a, T> {
     #[cfg(feature = "c-client")]
     vector_ptr: &'a [*mut T],
@@ -271,8 +273,14 @@ pub struct DataVecVec<'a, T> {
     _phantom: PhantomData<&'a T>,
 }
 
+#[derive(Clone)]
 pub struct NameVec<'a> {
+    #[cfg(feature = "c-client")]
     vector_ptr: &'a [*mut u8],
+    #[cfg(not(feature = "c-client"))]
+    names: Vec<String>,
+    #[cfg(not(feature = "c-client"))]
+    _phantom: PhantomData<&'a u8>,
 }
 
 use std::slice::SliceIndex;
@@ -317,7 +325,14 @@ impl<'a, T: std::fmt::Debug> fmt::Debug for DataVecVec<'a, T> {
 
 impl<'a> NameVec<'a> {
     pub fn len(&self) -> usize {
-        self.vector_ptr.len()
+        #[cfg(feature = "c-client")]
+        {
+            self.vector_ptr.len()
+        }
+        #[cfg(not(feature = "c-client"))]
+        {
+            self.names.len()
+        }
     }
 }
 
@@ -325,11 +340,16 @@ impl<'a> Index<usize> for NameVec<'a> {
     type Output = str;
 
     fn index(&self, index: usize) -> &Self::Output {
+        #[cfg(feature = "c-client")]
         unsafe {
             let vv = self.vector_ptr[index];
             let c_str: &CStr = unsafe { CStr::from_ptr(vv as *const c_char) };
             let slice: &str = c_str.to_str().unwrap();
             slice
+        }
+        #[cfg(not(feature = "c-client"))]
+        {
+            &self.names[index]
         }
     }
 }
@@ -343,7 +363,7 @@ impl<'a> fmt::Debug for NameVec<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StatValue<'a> {
     Illegal,
     ScalarIndex(f64),
@@ -354,6 +374,7 @@ pub enum StatValue<'a> {
     Symlink,
 }
 
+#[derive(Clone)]
 pub struct StatSegmentData<'a> {
     #[cfg(feature = "c-client")]
     orig_data: &'a sys::stat_segment_data_t,
@@ -414,6 +435,26 @@ impl<'a> StatSegmentData<'a> {
                     Some(&item.name as *const u8),
                     true,
                 );
+            }
+            sys::STAT_DIR_TYPE_NAME_VECTOR => {
+                let mut out: Vec<String> = vec![];
+                let simple_c: *const *const u8 = unsafe {
+                    access
+                        .stat_segment_adjust(item.__bindgen_anon_1.data)
+                        .unwrap() as *const *const u8
+                };
+                let slice_simple_c = vv2slice(simple_c);
+                for (i, x) in slice_simple_c.into_iter().enumerate() {
+                    let c_str: &CStr = unsafe {
+                        CStr::from_ptr(access.stat_segment_adjust(*x).unwrap() as *const u8)
+                    };
+                    let name: &str = c_str.to_str().unwrap();
+                    out.push(name.to_string());
+                }
+                StatValue::NameVector(NameVec {
+                    names: out,
+                    _phantom: PhantomData,
+                })
             }
             sys::STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
                 let simple_c: *const *const u64 = unsafe {
@@ -767,13 +808,14 @@ pub struct VppStatData<'a> {
     #[cfg(feature = "c-client")]
     data: &'a [sys::stat_segment_data_t],
     #[cfg(not(feature = "c-client"))]
-    stat_data: &'a u32,
+    data: Vec<StatSegmentData<'a>>,
+    #[cfg(not(feature = "c-client"))]
+    _phantom: PhantomData<&'a u8>,
 }
 
 pub struct VppStatDataIterator<'a> {
     // #[cfg(feature = "c-client")]
     stat_data: &'a VppStatData<'a>,
-    #[cfg(feature = "c-client")]
     curr: usize,
 }
 
@@ -781,8 +823,13 @@ impl<'a> Iterator for VppStatDataIterator<'a> {
     type Item = StatSegmentData<'a>;
     #[cfg(not(feature = "c-client"))]
     fn next(&mut self) -> Option<Self::Item> {
-        panic!("fixme");
-        None
+        if self.curr < self.stat_data.len() {
+            let curr = self.curr;
+            self.curr = curr + 1;
+            Some(self.stat_data.data[curr].clone())
+        } else {
+            None
+        }
     }
     #[cfg(feature = "c-client")]
     fn next(&mut self) -> Option<Self::Item> {
@@ -807,23 +854,16 @@ impl<'a> VppStatData<'a> {
     }
     #[cfg(not(feature = "c-client"))]
     pub fn iter(&'a self) -> VppStatDataIterator {
-        VppStatDataIterator { stat_data: self }
+        VppStatDataIterator {
+            stat_data: self,
+            curr: 0,
+        }
     }
-    #[cfg(feature = "c-client")]
     pub fn len(&self) -> usize {
         self.data.len()
     }
-    #[cfg(not(feature = "c-client"))]
-    pub fn len(&self) -> usize {
-        panic!("FIXME")
-    }
-    #[cfg(feature = "c-client")]
     pub fn is_empty(&self) -> bool {
         self.data.len() == 0
-    }
-    #[cfg(not(feature = "c-client"))]
-    pub fn is_empty(&self) -> bool {
-        panic!("FIXME")
     }
 }
 
@@ -906,9 +946,12 @@ impl<'a, 'b: 'a> VppStatDir<'a> {
 
             let newval = StatSegmentData::from_ctype(&access, v);
             println!("{}: {:?}", index, &newval);
+            out.push(newval);
         }
-
-        panic!("fixme")
+        Ok(VppStatData {
+            data: out,
+            _phantom: PhantomData,
+        })
     }
     #[cfg(feature = "c-client")]
     pub fn dump(&'a self) -> Result<VppStatData<'b>, VppStatDumpError> {
