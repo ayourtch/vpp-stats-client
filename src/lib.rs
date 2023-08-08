@@ -83,7 +83,7 @@ pub mod sys {
     #[repr(C)]
     #[derive(Copy, Clone)]
     pub union vlib_stats_entry_t__bindgen_ty_1 {
-        pub __bindgen_anon_1: vlib_stats_entry_t__bindgen_ty_1__bindgen_ty_1,
+        pub x2u32: u32x2_struct_t,
         pub index: u64,
         pub value: u64,
         pub data: *mut ::std::os::raw::c_void,
@@ -91,7 +91,7 @@ pub mod sys {
     }
     #[repr(C)]
     #[derive(Debug, Default, Copy, Clone)]
-    pub struct vlib_stats_entry_t__bindgen_ty_1__bindgen_ty_1 {
+    pub struct u32x2_struct_t {
         pub index1: u32,
         pub index2: u32,
     }
