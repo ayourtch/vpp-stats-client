@@ -359,6 +359,7 @@ pub struct StatSegmentData<'a> {
     orig_data: &'a sys::stat_segment_data_t,
     pub name: &'a str,
     pub value: StatValue<'a>,
+    pub via_symlink: bool,
 }
 impl<'a> fmt::Debug for StatSegmentData<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -369,14 +370,39 @@ impl<'a> fmt::Debug for StatSegmentData<'a> {
 impl<'a> StatSegmentData<'a> {
     #[cfg(not(feature = "c-client"))]
     fn from_ctype(access: &crate::sys::StatSegmentAccess, item: &'a VlibStatsEntry) -> Self {
+        Self::copy_data(access, item, None, false)
+    }
+
+    #[cfg(not(feature = "c-client"))]
+    fn copy_data(
+        access: &crate::sys::StatSegmentAccess,
+        item: &'a VlibStatsEntry,
+        index2: Option<usize>,
+        via_symlink: bool,
+    ) -> Self {
         let c_str: &CStr = unsafe { CStr::from_ptr(&item.name as *const u8) };
         let name: &str = c_str.to_str().unwrap();
-        println!("Name: {}", &name);
+        println!("Name: {} type: {}", &name, item.type_);
         let value = match item.type_ {
             sys::STAT_DIR_TYPE_ILLEGAL => StatValue::Illegal,
             sys::STAT_DIR_TYPE_SCALAR_INDEX => {
                 let val = unsafe { item.__bindgen_anon_1.value };
                 StatValue::ScalarIndex(val as f64)
+            }
+            sys::STAT_DIR_TYPE_SYMLINK => {
+                let dir_index = unsafe { item.__bindgen_anon_1.x2u32.index1 };
+                let target_index = unsafe { item.__bindgen_anon_1.x2u32.index2 };
+                let dslice = vv2slice(access.get_directory_vector());
+                let entry = &dslice[dir_index as usize];
+
+                let c_str: &CStr = unsafe { CStr::from_ptr(&entry.name as *const u8) };
+                let name: &str = c_str.to_str().unwrap();
+                println!("link target Name: {}", &name);
+                println!(
+                    "symlink with dir index {} target index {}",
+                    dir_index, target_index
+                );
+                return Self::copy_data(access, entry, Some(target_index as usize), true);
             }
             sys::STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
                 let simple_c: *const *const u64 = unsafe {
@@ -391,8 +417,12 @@ impl<'a> StatSegmentData<'a> {
                     let mut counters: Vec<u64> = vec![];
                     let cvec = unsafe { access.stat_segment_adjust(*x).unwrap() };
                     let s_cvec = vv2slice(cvec);
-                    for c in s_cvec {
-                        counters.push(*c);
+                    if let Some(idx2) = index2 {
+                        counters.push(s_cvec[idx2]);
+                    } else {
+                        for c in s_cvec {
+                            counters.push(*c);
+                        }
                     }
                     vvec.push(counters);
                 }
@@ -407,7 +437,11 @@ impl<'a> StatSegmentData<'a> {
             }
             x => unimplemented!("Unimplemented entry type {}", x),
         };
-        StatSegmentData { name, value }
+        StatSegmentData {
+            name,
+            value,
+            via_symlink,
+        }
     }
     #[cfg(feature = "c-client")]
     fn from_ctype(item: &'a sys::stat_segment_data_t) -> Self {
@@ -444,6 +478,7 @@ impl<'a> StatSegmentData<'a> {
             orig_data: item,
             name,
             value,
+            via_symlink: item.via_symlink,
         }
     }
 }
