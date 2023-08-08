@@ -12,6 +12,7 @@ use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use std::fmt;
 use std::fmt::{Debug, Error, Formatter};
+use std::marker::PhantomData;
 use std::time::{Duration, Instant};
 use uds;
 
@@ -262,7 +263,12 @@ struct CounterCombined {
 }
 
 pub struct DataVecVec<'a, T> {
+    #[cfg(feature = "c-client")]
     vector_ptr: &'a [*mut T],
+    #[cfg(not(feature = "c-client"))]
+    vector: Vec<Vec<T>>,
+    #[cfg(not(feature = "c-client"))]
+    _phantom: PhantomData<&'a T>,
 }
 
 pub struct NameVec<'a> {
@@ -273,7 +279,11 @@ use std::slice::SliceIndex;
 
 impl<'a, T> DataVecVec<'a, T> {
     pub fn len(&self) -> usize {
-        self.vector_ptr.len()
+        #[cfg(feature = "c-client")]
+        let x = self.vector_ptr.len();
+        #[cfg(not(feature = "c-client"))]
+        let x = self.vector.len();
+        x
     }
 }
 
@@ -281,13 +291,16 @@ impl<'a, T> Index<usize> for DataVecVec<'a, T> {
     type Output = [T];
 
     fn index(&self, index: usize) -> &Self::Output {
+        #[cfg(feature = "c-client")]
         unsafe {
             let vv = self.vector_ptr[index];
-            #[cfg(feature = "c-client")]
             let vv_len = sys::stat_segment_vec_len(vv as *mut libc::c_void) as usize;
-            #[cfg(not(feature = "c-client"))]
-            let vv_len = vpp::vec::vec_len(vv as *mut libc::c_void) as usize;
             let slice: &[T] = core::slice::from_raw_parts(vv, vv_len);
+            slice
+        }
+        #[cfg(not(feature = "c-client"))]
+        {
+            let slice: &[T] = &self.vector[index];
             slice
         }
     }
@@ -355,7 +368,7 @@ impl<'a> fmt::Debug for StatSegmentData<'a> {
 
 impl<'a> StatSegmentData<'a> {
     #[cfg(not(feature = "c-client"))]
-    fn from_ctype(item: &'a VlibStatsEntry) -> Self {
+    fn from_ctype(access: &crate::sys::StatSegmentAccess, item: &'a VlibStatsEntry) -> Self {
         let c_str: &CStr = unsafe { CStr::from_ptr(&item.name as *const u8) };
         let name: &str = c_str.to_str().unwrap();
         println!("Name: {}", &name);
@@ -366,16 +379,35 @@ impl<'a> StatSegmentData<'a> {
                 StatValue::ScalarIndex(val as f64)
             }
             sys::STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE => {
-                let vs = vv2slice(unsafe { item.__bindgen_anon_1.simple_counter_vec });
-                let val = DataVecVec { vector_ptr: vs };
+                let simple_c: *const *const u64 = unsafe {
+                    access
+                        .stat_segment_adjust(item.__bindgen_anon_1.data)
+                        .unwrap() as *const *const u64
+                };
+                let slice_simple_c = vv2slice(simple_c);
+                let mut vvec: Vec<Vec<u64>> = vec![];
+
+                for (i, x) in slice_simple_c.into_iter().enumerate() {
+                    let mut counters: Vec<u64> = vec![];
+                    let cvec = unsafe { access.stat_segment_adjust(*x).unwrap() };
+                    let s_cvec = vv2slice(cvec);
+                    for c in s_cvec {
+                        counters.push(*c);
+                    }
+                    vvec.push(counters);
+                }
+                // let () = item; // VlibStatsEntry
+                // let vs = vv2slice(unsafe { item.__bindgen_anon_1.__bindgen_anon_1.simple_counter_vec });
+                // let val = DataVecVec { vector_ptr: vs };
+                let val = DataVecVec {
+                    vector: vvec,
+                    _phantom: PhantomData,
+                };
                 StatValue::CounterVectorSimple(val)
             }
             x => unimplemented!("Unimplemented entry type {}", x),
         };
-        StatSegmentData {
-            name,
-            value,
-        }
+        StatSegmentData { name, value }
     }
     #[cfg(feature = "c-client")]
     fn from_ctype(item: &'a sys::stat_segment_data_t) -> Self {
@@ -407,7 +439,6 @@ impl<'a> StatSegmentData<'a> {
             sys::STAT_DIR_TYPE_SYMLINK => StatValue::Symlink,
             7_u32..=u32::MAX => unimplemented!(),
         };
-
 
         StatSegmentData {
             orig_data: item,
@@ -795,7 +826,8 @@ impl<'a, 'b: 'a> VppStatDir<'a> {
 
         for (i, index) in self.dir_vec.iter().enumerate() {
             let v = &counter_slice[*index as usize];
-            let newval = StatSegmentData::from_ctype(v);
+
+            let newval = StatSegmentData::from_ctype(&access, v);
             println!("{}: {:?}", index, &newval);
         }
 
