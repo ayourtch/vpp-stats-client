@@ -50,11 +50,11 @@ mod vpp {
 
 pub const VLIB_STATS_MAX_NAME_SZ: usize = 128;
 #[cfg(feature = "c-client")]
-pub mod sys {
+mod sys {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 #[cfg(not(feature = "c-client"))]
-pub mod sys {
+mod sys {
     #[doc = " 64bit counters"]
     pub type counter_t = u64;
     #[doc = " Combined counter to hold both packets and byte differences."]
@@ -405,10 +405,6 @@ impl<'a> StatSegmentData<'a> {
         use crate::sys::vlib_counter_t;
         let c_str: &CStr = unsafe { CStr::from_ptr(maybe_name.unwrap_or(&item.name as *const u8)) };
         let name: &str = c_str.to_str().unwrap();
-        println!(
-            "Name: {} type: {}, via_symlink: {}",
-            &name, item.type_, via_symlink
-        );
         let value = match item.type_ {
             sys::STAT_DIR_TYPE_ILLEGAL => StatValue::Illegal,
             sys::STAT_DIR_TYPE_SCALAR_INDEX => {
@@ -423,11 +419,6 @@ impl<'a> StatSegmentData<'a> {
 
                 let c_str: &CStr = unsafe { CStr::from_ptr(&entry.name as *const u8) };
                 let name: &str = c_str.to_str().unwrap();
-                println!("link target Name: {}", &name);
-                println!(
-                    "symlink with dir index {} target index {}",
-                    dir_index, target_index
-                );
                 return Self::copy_data(
                     access,
                     entry,
@@ -565,58 +556,6 @@ impl<'a> StatSegmentData<'a> {
         }
     }
 }
-
-/*
-use std::arch::asm;
-
-#[cfg(any(target_arch = "arm64", target_arch = "aarch64"))]
-pub fn rdtscp() -> u64 {
-    let mut val: u64;
-    unsafe {
-        asm!(
-            "mrs {0}, cntvct_el0",
-            out(reg) val,
-            options(nostack)
-        );
-    }
-
-    val
-}
-
-
-/* https://lukas-prokop.at/articles/2021-11-10-rdtsc-with-rust-asm */
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-fn rdtscp() -> u64 {
-    let eax: u32;
-    let ecx: u32;
-    let edx: u32;
-    {
-        unsafe {
-            asm!(
-              "rdtscp",
-              lateout("eax") eax,
-              lateout("ecx") ecx,
-              lateout("edx") edx,
-              options(nomem, nostack)
-            );
-        }
-    }
-
-    let counter: u64 = (edx as u64) << 32 | eax as u64;
-    counter
-}
-
-#[no_mangle]
-fn bench<F>(f: F) -> u64
-where
-    F: Fn(),
-{
-    let pre = rdtscp(); // unsafe { core::arch::x86_64::_rdtsc() };
-    f();
-    let post = rdtscp(); // unsafe { core::arch::x86_64::_rdtsc() };
-    post - pre
-}
-*/
 
 #[repr(C)]
 pub struct VlibStatsEntry {
@@ -945,7 +884,6 @@ impl<'a, 'b: 'a> VppStatDir<'a> {
             let v = &counter_slice[*index as usize];
 
             let newval = StatSegmentData::from_ctype(&access, v);
-            println!("{}: {:?}", index, &newval);
             out.push(newval);
         }
         Ok(VppStatData {
@@ -1054,9 +992,6 @@ impl VppStatClient {
                 // let mut_mmap = mmap.make_mut().unwrap();
                 let len = mmap.len();
                 let piece = &mmap[0..128];
-                println!("mmap len: {piece:x?}");
-                println!("Result: {x:?}, {fds:?}");
-
                 let mut client = Self::new(mmap);
                 let access = sys::StatSegmentAccess::start(&client).unwrap();
                 client.main.heartbeat_epoch = RefCell::new(access.get_epoch());
