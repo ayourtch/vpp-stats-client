@@ -123,6 +123,7 @@ mod sys {
     pub struct StatSegmentAccess {
         /* shared header from the client */
         shared_header: *const crate::VlibStatsSharedHeader,
+        shared_memory_size: usize,
         directory_vector: *const VlibStatsEntry,
         epoch: u64,
     }
@@ -130,6 +131,7 @@ mod sys {
     impl StatSegmentAccess {
         pub fn start(client: &VppStatClient) -> Option<Self> {
             let shared_header = client.get_shared_header();
+            let shared_memory_size = client.main.memory_size;
             let maybe_timeout = client.get_timeout();
             let epoch = unsafe { std::ptr::read_volatile(shared_header).epoch };
             let success = if let Some(timeout) = maybe_timeout {
@@ -145,7 +147,7 @@ mod sys {
                 true
             };
             let directory_vector = unsafe {
-                Self::stat_segment_adjust_x(shared_header, unsafe {
+                Self::stat_segment_adjust_x(shared_header, shared_memory_size, unsafe {
                     std::ptr::read_volatile(shared_header).directory_vector
                 })
                 .unwrap()
@@ -154,6 +156,7 @@ mod sys {
             if success {
                 Some(Self {
                     shared_header,
+                    shared_memory_size,
                     directory_vector,
                     epoch,
                 })
@@ -164,12 +167,17 @@ mod sys {
         #[cfg(not(feature = "c-client"))]
         pub fn stat_segment_adjust_x<T>(
             shared_header: *const VlibStatsSharedHeader,
+            mmap_len: usize,
             ptr: *const T,
         ) -> Option<*const T> {
-            unsafe {
-                Some((shared_header as *const u8).offset(
-                    (ptr as *const u8).offset_from(std::ptr::read_volatile(shared_header).base),
-                ) as *const T)
+            let offset_value = unsafe {
+                (ptr as *const u8).offset_from(std::ptr::read_volatile(shared_header).base)
+            };
+
+            if offset_value >= 0 && offset_value < mmap_len.try_into().unwrap() {
+                unsafe { Some((shared_header as *const u8).offset(offset_value) as *const T) }
+            } else {
+                None
             }
         }
 
@@ -178,7 +186,7 @@ mod sys {
             let shared_header = self.shared_header;
             /* the mapping in the original process and mapping in the current process
              * will have different logical memory addresses. Adjust for that */
-            Self::stat_segment_adjust_x(shared_header, ptr)
+            Self::stat_segment_adjust_x(shared_header, self.shared_memory_size, ptr)
         }
         #[cfg(not(feature = "c-client"))]
         pub fn get_stat_vector_r(&self) -> Option<*const VlibStatsEntry> {
