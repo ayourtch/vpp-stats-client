@@ -1099,6 +1099,7 @@ impl VppStatClient {
         use regex::Regex;
         let mut dir_vec: Vec<u32> = vec![];
         let mut regexes: Vec<Regex> = vec![];
+        let mut check_patterns = false;
 
         if let Some(pat_vector) = patterns {
             for pat in &pat_vector.strings {
@@ -1108,6 +1109,9 @@ impl VppStatClient {
                         return Err(VppStatLsError::RegexCompileError);
                     }
                 }
+            }
+            if pat_vector.len() > 0 {
+                check_patterns = true;
             }
         }
 
@@ -1120,14 +1124,14 @@ impl VppStatClient {
             let value = unsafe { v.__bindgen_anon_1.value };
             let type_ = v.type_;
 
-            if patterns.is_none() {
-                dir_vec.push(i as u32);
-            } else {
+            if check_patterns {
                 for regex in &regexes {
                     if regex.is_match(name) {
                         dir_vec.push(i as u32);
                     }
                 }
+            } else {
+                dir_vec.push(i as u32);
             }
         }
         let current_epoch = access.get_epoch();
