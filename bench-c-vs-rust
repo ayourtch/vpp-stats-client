@@ -1,0 +1,5 @@
+#!/bin/sh
+
+rm -rf target/criterion
+cargo bench -F c-client
+cargo bench
